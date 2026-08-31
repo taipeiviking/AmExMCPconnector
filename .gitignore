@@ -1,0 +1,105 @@
+# Dependencies, compiled output, installers, and test artifacts
+node_modules/
+dist/
+release/
+coverage/
+.vitest/
+.cache/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Codex/projectless working folders (never part of the product repository)
+work/
+outputs/
+
+# Environment files: commit the documented template only
+.env
+.env.*
+!.env.example
+
+# Credentials, private keys, certificates, secret stores, and token caches
+credentials/
+secrets/
+private/
+*.credentials
+*.credential
+*.secret
+*.secrets
+*.key
+*.keyref
+*.pem
+*.pfx
+*.p12
+*.p8
+*.der
+*.cer
+*.crt
+*.jks
+*.keystore
+*.token
+*.tokens
+*.token-cache
+*.token-cache.*
+*oauth-cache*/
+*token-cache*/
+*.auth.json
+*.session.json
+credentials.json
+client_secret*.json
+token.json
+oauth.json
+tunnel-client*.json
+tunnel-client*.yaml
+tunnel-client*.yml
+
+# Local databases and encryption sidecars
+/data/
+/local-data/
+*.db
+*.db-*
+*.db.enc
+*.sqlite
+*.sqlite3
+*.sqlite-*
+*.sqlite3-*
+*-wal
+*-shm
+*-journal
+*.enc.tmp
+
+# Real financial input/output. Synthetic test fixtures live under
+# tests/fixtures/synthetic and are intentionally not excluded by extension.
+/imports/
+/statements/
+/statement-imports/
+/quarantine/
+/exports/
+/export-packages/
+/reconciliation/
+
+# Runtime logs and audit logs
+/logs/
+/audit/
+/audit-logs/
+*.log
+*.log.*
+
+# OS and editor state
+.DS_Store
+Thumbs.db
+Desktop.ini
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.example.json
+*.user
+*.suo
+
+# Local package-manager and signing configuration
+.npmrc
+electron-builder.env
+win-csc-link.*
+win-csc-key-password.*
