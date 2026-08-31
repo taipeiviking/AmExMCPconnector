@@ -88,15 +88,14 @@ try {
     throw new Error(`unexpected renderer snapshot: ${JSON.stringify(snapshot)}`);
   }
 
-  const ui = await retry(async () => {
+  const accountResult = await retry(async () => {
     const rendered = await evaluateInRenderer(
       page.webSocketDebuggerUrl,
-      `(async () => {
+      `(() => {
         document.querySelector('[data-section="accounts"]')?.click();
-        await new Promise((resolve) => setTimeout(resolve, 50));
         const cards = [...document.querySelectorAll('.compact-account-card')];
         const accountText = document.querySelector('#accounts')?.textContent ?? '';
-        const accountResult = {
+        return {
           active: document.querySelector('#accounts')?.classList.contains('active') === true,
           heading: document.querySelector('#accounts h2')?.textContent,
           cardCount: cards.length,
@@ -105,41 +104,65 @@ try {
           hasLongCardNumber: /(?:\\d[ -]?){13,19}/u.test(accountText),
           bodyBackground: getComputedStyle(document.body).backgroundColor,
           accountMetric: document.querySelector('#account-count')?.textContent,
-          cardsText: document.querySelector('#accounts-cards')?.textContent,
-          notice: document.querySelector('#notice')?.textContent,
           pageTitle: document.querySelector('#page-title')?.textContent
         };
-        document.querySelector('[data-section="getting-started"]')?.click();
-        const wizardResult = {
-          stepCount: document.querySelectorAll('[data-wizard-step]').length,
-          pathCount: document.querySelectorAll('[data-account-path]').length,
-          active: document.querySelector('#getting-started')?.classList.contains('active') === true
-        };
-        const testDrive = await globalThis.amexConnector.performAction('run-safe-test-drive');
-        document.querySelector('[data-section="accounts"]')?.click();
-        return { accountResult, wizardResult, testDrive };
       })()`
     );
-    if (rendered?.accountResult?.cardCount !== 4) {
-      throw new Error(`synthetic account cards have not rendered yet: ${JSON.stringify(rendered)}`);
+    if (rendered?.cardCount !== 4 || rendered.active !== true || rendered.pageTitle !== "Accounts") {
+      throw new Error(`Accounts UI has not settled yet: ${JSON.stringify(rendered)}`);
     }
     return rendered;
-  }, "rendered onboarding and Accounts UI");
+  }, "rendered Accounts UI");
+
+  const wizardResult = await retry(async () => {
+    const rendered = await evaluateInRenderer(
+      page.webSocketDebuggerUrl,
+      `(() => {
+        document.querySelector('[data-section="getting-started"]')?.click();
+        return {
+          stepCount: document.querySelectorAll('[data-wizard-step]').length,
+          pathCount: document.querySelectorAll('[data-account-path]').length,
+          active: document.querySelector('#getting-started')?.classList.contains('active') === true,
+          pageTitle: document.querySelector('#page-title')?.textContent
+        };
+      })()`
+    );
+    if (rendered?.active !== true || rendered.pageTitle !== "Getting started") {
+      throw new Error(`onboarding UI has not settled yet: ${JSON.stringify(rendered)}`);
+    }
+    return rendered;
+  }, "rendered onboarding UI");
+
+  const testDrive = await evaluateInRenderer(
+    page.webSocketDebuggerUrl,
+    `globalThis.amexConnector.performAction('run-safe-test-drive')`
+  );
+
+  await retry(async () => {
+    const active = await evaluateInRenderer(
+      page.webSocketDebuggerUrl,
+      `(() => {
+        document.querySelector('[data-section="accounts"]')?.click();
+        return document.querySelector('#accounts')?.classList.contains('active') === true &&
+          document.querySelector('#page-title')?.textContent === 'Accounts';
+      })()`
+    );
+    if (active !== true) throw new Error("Accounts UI has not returned for screenshot capture");
+    return active;
+  }, "Accounts screenshot state");
 
   if (
-    ui?.accountResult?.active !== true ||
-    ui.accountResult.heading !== "Accounts" ||
-    ui.accountResult.encryptedTags !== 4 ||
-    ui.accountResult.greenStatuses < 1 ||
-    ui.accountResult.hasLongCardNumber !== false ||
-    ui.accountResult.bodyBackground !== "rgb(23, 25, 28)" ||
-    ui?.wizardResult?.active !== true ||
-    ui.wizardResult.stepCount !== 5 ||
-    ui.wizardResult.pathCount !== 4 ||
-    ui?.testDrive?.ok !== true ||
-    ui.testDrive.testDrive?.checks?.length !== 4
+    accountResult.heading !== "Accounts" ||
+    accountResult.encryptedTags !== 4 ||
+    accountResult.greenStatuses < 1 ||
+    accountResult.hasLongCardNumber !== false ||
+    accountResult.bodyBackground !== "rgb(23, 25, 28)" ||
+    wizardResult.stepCount !== 5 ||
+    wizardResult.pathCount !== 4 ||
+    testDrive?.ok !== true ||
+    testDrive.testDrive?.checks?.length !== 4
   ) {
-    throw new Error(`unexpected rendered UI state: ${JSON.stringify(ui)}`);
+    throw new Error(`unexpected rendered UI state: ${JSON.stringify({ accountResult, wizardResult, testDrive })}`);
   }
 
   const screenshotPath = process.env.AMEX_SMOKE_SCREENSHOT_PATH;
