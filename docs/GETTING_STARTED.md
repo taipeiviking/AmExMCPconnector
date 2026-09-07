@@ -63,7 +63,7 @@ If the file, selected account, account data, or category mapping changes—or th
 
 ## Test a U.S. personal card with Plaid Sandbox
 
-Plaid is a separate service, so first create your own Plaid developer account and obtain its **client ID** and **Sandbox secret**. In the Plaid Dashboard's Link customization, set **Account Select** to **Enabled for one account**. Do not use an Amex password, card number, or consumer Plaid login in the app's credential fields.
+Plaid is a separate service, so first create your own Plaid developer account and obtain its **client ID** and **Sandbox secret** from **Plaid Dashboard → Developers → Keys**. In the Plaid Dashboard's Link customization, set **Account Select** to **Enabled for one account**. Do not use an Amex password, card number, or consumer Plaid login in the app's credential fields.
 
 Then, in the app:
 
@@ -82,7 +82,7 @@ The desktop app itself never asks for an Amex username, password, one-time code,
 
 ### Moving from Sandbox to Production
 
-Production is not unlocked by passing the Sandbox test. Apply for Plaid Production access, complete Plaid's current business, security, institution, and product requirements, and verify that the exact Plaid app is approved for American Express and Transactions. Coverage, consent behavior, and individual-card availability can change. This alpha has no verified live Production guarantee.
+Production is not unlocked by passing the Sandbox test. Apply for Plaid Production access, complete Plaid's current business, security, institution, and product requirements, and verify that the exact Plaid app is approved for American Express and Transactions. In the Plaid Dashboard, use **Developers → Keys** to collect the same team client ID and the separate **Production secret**. Coverage, consent behavior, and individual-card availability can change. This alpha has no verified live Production guarantee.
 
 Choose **Production — real account, Plaid approval required**, use that Plaid app's Production secret, and configure **OAuth return URL (optional on desktop)** when your Plaid tenant or institution setup requires it. For this external-browser desktop flow Plaid can support OAuth without a redirect URI, but an applicable URI is recommended and must be an owned plain HTTPS URL already allowlisted in the Plaid Dashboard, with no query or fragment. Do not guess one.
 

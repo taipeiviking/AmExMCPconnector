@@ -77,6 +77,8 @@ byId("cancel-plaid-setup").addEventListener("click", () => {
   byId("plaid-setup-card").hidden = true;
 });
 byId("plaid-environment").addEventListener("change", updatePlaidEnvironmentHelp);
+byId("choose-plaid-sandbox").addEventListener("click", () => selectPlaidEnvironment("sandbox"));
+byId("choose-plaid-production").addEventListener("click", () => selectPlaidEnvironment("production"));
 byId("remove-plaid-credentials").addEventListener("click", () => {
   void performAction({ kind: "remove-plaid-credentials" });
 });
@@ -440,13 +442,27 @@ function updatePlaidEnvironmentHelp(): void {
   const production = (byId("plaid-environment") as HTMLSelectElement).value === "production";
   byId("plaid-redirect-field").hidden = !production;
   byId("plaid-sandbox-help").hidden = production;
+  byId("plaid-production-checklist").hidden = !production;
+  byId("choose-plaid-sandbox").classList.toggle("selected", !production);
+  byId("choose-plaid-production").classList.toggle("selected", production);
   setText("plaid-secret-label", production ? "Plaid Production secret" : "Plaid Sandbox secret");
+  setText(
+    "save-plaid-settings",
+    production ? "Verify Production credentials — no Amex connection yet" : "Verify Sandbox credentials — fake data only"
+  );
   setText(
     "plaid-environment-help",
     production
-      ? "Production can connect a real account only after Plaid has approved and enabled your app for Transactions."
+      ? "Production can connect a real account only after Plaid has approved and enabled your app for Transactions. Use the Production secret that matches this client ID; a successful check does not prove American Express is available."
       : "Sandbox uses synthetic institutions and never connects to your real Amex account."
   );
+}
+
+function selectPlaidEnvironment(environment: "sandbox" | "production"): void {
+  const select = byId("plaid-environment") as HTMLSelectElement;
+  select.value = environment;
+  updatePlaidEnvironmentHelp();
+  (byId("plaid-client-id") as HTMLInputElement).focus();
 }
 
 async function configurePlaid(): Promise<void> {
@@ -455,6 +471,7 @@ async function configurePlaid(): Promise<void> {
   const secretInput = byId("plaid-client-secret") as HTMLInputElement;
   const redirectUriInput = byId("plaid-redirect-uri") as HTMLInputElement;
   const confirmed = (byId("plaid-read-only-confirm") as HTMLInputElement).checked;
+  const productionConfirmed = (byId("plaid-production-confirm") as HTMLInputElement).checked;
   const resultPanel = byId("plaid-setup-result");
   const saveButton = byId("save-plaid-settings") as HTMLButtonElement;
   if (!clientIdInput.value.trim() || !secretInput.value.trim()) {
@@ -463,6 +480,10 @@ async function configurePlaid(): Promise<void> {
   }
   if (!confirmed) {
     showToast("Confirm the read-only boundary before saving provider credentials.");
+    return;
+  }
+  if (environment === "production" && !productionConfirmed) {
+    showToast("Confirm the four Plaid Production prerequisites before verifying real-account credentials.");
     return;
   }
   if (environment !== "sandbox" && environment !== "production") {

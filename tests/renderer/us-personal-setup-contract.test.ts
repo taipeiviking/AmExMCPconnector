@@ -55,9 +55,11 @@ describe("U.S. personal onboarding contract", () => {
   });
 
   it("clearly separates fake Sandbox testing from approved Production access", () => {
-    expect(html).toContain("Sandbox — fake account, recommended first");
-    expect(html).toContain("Sandbox never connects to your real Amex account");
-    expect(html).toContain("Production — real account, Plaid approval required");
+    expect(html).toContain("Test safely — Plaid Sandbox (fake data)");
+    expect(html).toContain("Sandbox uses synthetic institutions and never connects to your real Amex account");
+    expect(html).toContain("Connect real account — Plaid Production (approval required)");
+    expect(html).toContain("Connect a real Amex card");
+    expect(html).toContain("Before connecting a real Amex card, confirm all four");
     expect(html).toContain("Production access is granted by Plaid, not by this installer");
     expect(html).toContain("requests only transaction access");
     expect(html).toContain("Plaid is a separate service");
@@ -75,10 +77,10 @@ describe("U.S. personal onboarding contract", () => {
       expect(input).toMatch(/spellcheck=["']false["']/i);
     }
 
-    expect(html).toContain("Saved for this Windows user in Windows Credential Manager");
+    expect(html).toContain("saved only for this Windows user in Windows Credential Manager");
     expect(html).toContain("not written to <code>.env</code>, the database, logs, or Git");
-    expect(html).toContain("these fields are Plaid app credentials—not my Amex username or password");
-    expect(html).toContain("Do not paste an Amex password, card number, OAuth token, or account data into these fields");
+    expect(html).toContain("does not ask for my Amex username or password");
+    expect(html).toContain("Do not paste an Amex password, card number, CVV, one-time code, OAuth token, or account data into these fields");
     expect(html).not.toMatch(/<input[^>]*(?:amex-password|amex-username)/i);
   });
 

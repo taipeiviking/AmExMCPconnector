@@ -205,12 +205,20 @@ try {
 
   const screenshotPath = process.env.AMEX_SMOKE_SCREENSHOT_PATH;
   if (screenshotPath) {
+    const screenshotPlaidEnvironment = process.env.AMEX_SMOKE_PLAID_ENV === "production" ? "production" : "sandbox";
     if (process.env.AMEX_SMOKE_SCREENSHOT_VIEW === "plaid-setup") {
       await evaluateInRenderer(
         page.webSocketDebuggerUrl,
         `(() => {
           document.querySelector('[data-account-path="US-personal"]')?.click();
           document.querySelector('#open-us-setup-from-wizard')?.click();
+          if ('${screenshotPlaidEnvironment}' === 'production') {
+            const environment = document.querySelector('#plaid-environment');
+            if (environment instanceof HTMLSelectElement) {
+              environment.value = 'production';
+              environment.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+          }
           document.querySelector('#plaid-setup-card')?.scrollIntoView({ block: 'start' });
           return document.querySelector('#plaid-setup-card')?.hidden === false;
         })()`

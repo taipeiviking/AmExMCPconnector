@@ -11,7 +11,7 @@ describe("nontechnical onboarding contract", () => {
     expect(html).toContain('id="wizard-safe-start"');
     expect(html).toContain("Recommended first");
     expect(html).toContain("Japan personal and company cards");
-    expect(html).toContain("Sandbox never connects to your real Amex account");
+    expect(html).toContain("Sandbox uses synthetic institutions and never connects to your real Amex account");
     expect(html).toContain("Plaid Production approval");
   });
 
@@ -29,6 +29,11 @@ describe("nontechnical onboarding contract", () => {
     expect(renderer).toContain("showWizardStep();");
     expect(renderer).toContain("No account was added");
     expect(renderer).toContain('kind: "configure-plaid"');
+    expect(html).toContain("Plaid Dashboard → Developers → Keys");
+    expect(html).toContain("Never enter here");
+    expect(html).toContain("Connect a real Amex card");
+    expect(html).toContain('id="plaid-production-checklist"');
+    expect(renderer).toContain("Confirm the four Plaid Production prerequisites");
     expect(controller).toContain('account.authorization.state === "authorized"');
     expect(controller).toContain('account.authorization.state === "unavailable"');
     expect(controller).toContain('return await this.syncUsAccount(active, provider, accountId)');
