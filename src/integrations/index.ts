@@ -14,6 +14,30 @@ export {
   type ProviderAccessTokenSource,
 } from "./generic-read-only-provider-client";
 export {
+  PlaidApiClient,
+  type PlaidApiConfiguration,
+  type PlaidApiPath,
+  type PlaidEnvironment,
+} from "./plaid-api-client";
+export {
+  PlaidHostedLinkProvider,
+  PLAID_PROVIDER_ID,
+  type PlaidHostedConsentCompletion,
+  type PlaidHostedLinkConfiguration,
+  type PlaidHostedLinkDependencies,
+} from "./plaid-hosted-link-provider";
+export {
+  PLAID_PRODUCTION_AMEX_INSTITUTION_NAMES,
+  PLAID_SANDBOX_TEST_INSTITUTION_NAMES,
+  plaidInstitutionPolicyForEnvironment,
+  type PlaidInstitutionPolicy,
+} from "./plaid-institution-policy";
+export {
+  PlaidReadOnlyFinancialProvider,
+  type PlaidAccessTokenSource,
+  type PlaidReadOnlyFinancialConfiguration,
+} from "./plaid-read-only-financial-provider";
+export {
   startLoopbackOAuthCallbackListener,
   type LoopbackOAuthCallbackOptions,
   type LoopbackOAuthCallbackSession,
