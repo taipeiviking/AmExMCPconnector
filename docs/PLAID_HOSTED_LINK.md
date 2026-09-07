@@ -229,6 +229,8 @@ Even after those gates, neither a successful Sandbox run nor Plaid's general Ame
 - [Hosted Link](https://plaid.com/docs/link/hosted-link/)
 - [Link API: `/link/token/create` and `/link/token/get`](https://plaid.com/docs/api/link/)
 - [Link flow overview](https://plaid.com/docs/link/)
+- [Link customization and Account Select](https://plaid.com/docs/link/customization/)
+- [Link update mode](https://plaid.com/docs/link/update-mode/)
 - [OAuth guide, registration, scoped consent, expiry, and revocation](https://plaid.com/docs/link/oauth/)
 - [Sandbox](https://plaid.com/docs/sandbox/)
 - [Items API: token exchange, Item status, token rotation, and removal](https://plaid.com/docs/api/items/)
