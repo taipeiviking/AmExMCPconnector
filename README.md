@@ -4,6 +4,16 @@ A Windows 11-focused, local-first desktop application for owner-controlled Ameri
 
 > **Development status:** this is a runnable local alpha, not production financial software and not affiliated with American Express. Start with the synthetic test drive. Japan CSV/XLSX/QIF/text-PDF import and all six reviewed accounting-file formats are wired end to end, but official statement layouts and accounting import behavior can change and must be verified before relying on real data. U.S. use requires an independently approved provider and configuration; this repository does not include provider access or direct/live Amex connectivity. Code signing, a reviewed update chain, broader real-format fixtures, operational recovery, and production security review remain release gates.
 
+## Installed the app? Start here
+
+1. Open **Amex Local Finance Connector**. If the dashboard is hidden, use its Windows system-tray icon and choose **Open dashboard**.
+2. On **Getting started**, choose **Start the safe test**. The seven-part check uses fake transactions in memory; it does not add an account, save a statement, open a sign-in page, or contact Amex.
+3. When all seven checks pass, use **Start over**, choose a Japan personal or company path, and follow **Your plan**. Japan statement import is the path available for real local testing now.
+4. Choose **Finish and add my Japan account**. The app opens **Accounts**, where you enter a nickname and owner/company label—not a card number or password.
+5. On the new account card, choose **Choose statement**. The account is preselected and the app opens the visible **Official statement imports** review. Nothing is stored until you inspect the rows and choose **Approve reviewed rows and import**; **Cancel preview** stores no transactions.
+
+U.S. choices remain disabled until the app's approved-provider readiness check passes. An unconfigured installation adds no U.S. account and opens no sign-in page. This app never asks for or stores an Amex password. See the [friendly first-use guide](docs/GETTING_STARTED.md); administrators can find optional provider configuration in [Windows setup](docs/WINDOWS_SETUP.md).
+
 ## What is implemented
 
 - Electron/TypeScript Windows tray app with a context-isolated, sandboxed dashboard for accounts, owner-editable portfolio membership, imports, exports, sync/authorization status, review-only alert dispositions, audit, and private connection status.
@@ -45,7 +55,7 @@ ChatGPT cannot directly reach a local server. Private connected mode therefore r
 
 Remote queries intentionally send the selected response to the chosen OpenAI product; “local-first storage” does not mean those selected results remain on the PC. Review workspace retention and data controls before connected use.
 
-## Quick start on Windows 11
+## Developer quick start on Windows 11
 
 Requires Node.js 22.12 or newer.
 

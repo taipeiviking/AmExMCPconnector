@@ -85,7 +85,7 @@ export function runLocalTestDrive(health: LocalRuntimeHealth): LocalTestDriveRes
     },
     {
       id: "loopback",
-      label: "Private local MCP posture",
+      label: "ChatGPT connection stays private",
       passed: mcpBoundaryReady,
       detail: health.mcpMode === "disabled"
         ? health.mcpState === "stopped"
@@ -97,7 +97,7 @@ export function runLocalTestDrive(health: LocalRuntimeHealth): LocalTestDriveRes
     },
     {
       id: "tools",
-      label: "Read-only ChatGPT boundary",
+      label: "ChatGPT access is read-only",
       passed: health.toolCount === 7,
       detail: `${health.toolCount} approved read-only tools are registered.`
     },

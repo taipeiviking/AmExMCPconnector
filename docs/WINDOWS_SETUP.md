@@ -1,5 +1,7 @@
 # Windows 11 setup
 
+This is the administrator and developer setup reference. It is not required for the safe local test or Japan statement import. Most first-time users should begin with [Getting started on Windows](GETTING_STARTED.md). U.S. choices intentionally stay disabled until the approved-provider readiness check described below passes; do not try to enable them with an Amex password.
+
 ## Developer setup
 
 Prerequisites:

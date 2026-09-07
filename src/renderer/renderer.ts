@@ -6,7 +6,8 @@ import type {
   DesktopActionResult,
   DesktopRequest,
   LocalTestDriveResult,
-  DesktopSnapshot
+  DesktopSnapshot,
+  UsProviderReadiness
 } from "../shared/ipc";
 
 const titles: Record<string, string> = {
@@ -26,6 +27,7 @@ let toastTimer: ReturnType<typeof setTimeout> | undefined;
 let wizardStep = 1;
 let selectedAccountPath = readLocalSetting("amex-onboarding-path");
 let latestSnapshot: DesktopSnapshot | undefined;
+let latestProviderReadiness: UsProviderReadiness | undefined;
 let pendingImportPreviewId: string | undefined;
 
 document.querySelectorAll<HTMLButtonElement>("[data-section]").forEach((button) => {
@@ -40,6 +42,12 @@ document.querySelectorAll<HTMLButtonElement>("[data-action]").forEach((button) =
 
 setupWizard();
 byId("add-account-button").addEventListener("click", () => void addAccount());
+byId("add-account-type").addEventListener("change", updateAccountTypeGuidance);
+byId("open-guided-setup").addEventListener("click", () => {
+  wizardStep = 1;
+  showWizardStep();
+  showSection("getting-started");
+});
 byId("import-button").addEventListener("click", () => void importStatement());
 byId("approve-import-button").addEventListener("click", () => void approveImport());
 byId("cancel-import-button").addEventListener("click", () => void cancelImport());
@@ -56,20 +64,36 @@ byId("restart-onboarding").addEventListener("click", () => {
 });
 
 showSection(readLocalSetting("amex-onboarding-complete") === "true" ? "overview" : "getting-started");
-void refresh();
+void initializeRenderer();
+
+async function initializeRenderer(): Promise<void> {
+  await refresh();
+  try {
+    const result = await window.amexConnector.performAction("preflight-us-provider");
+    if (result.providerReadiness) renderProviderReadiness(result.providerReadiness);
+  } catch {
+    // Snapshot-based gating remains fail-closed if the optional readiness check fails.
+  }
+}
 
 function showSection(section: string): void {
   document.querySelectorAll(".nav-item").forEach((item) => item.classList.toggle("active", item.getAttribute("data-section") === section));
   document.querySelectorAll(".page").forEach((page) => page.classList.toggle("active", page.id === section));
   setText("page-title", titles[section] ?? "Overview");
+  document.querySelector("main")?.scrollTo({ top: 0, behavior: "smooth" });
 }
 
 async function performAction(request: DesktopRequest): Promise<void> {
   try {
     const result = await window.amexConnector.performAction(request);
     showToast(result.message);
+    if (result.providerReadiness) renderProviderReadiness(result.providerReadiness);
     if (result.testDrive) renderTestDrive(result.testDrive);
-    if (result.importPreview) renderImportPreview(result.importPreview);
+    if (result.importPreview) {
+      renderImportPreview(result.importPreview);
+      showSection("imports");
+      focusPanel("import-preview");
+    }
     if (result.importSummary) renderImportSummary(result.importSummary);
     if (result.exportSummary) renderExportSummary(result.exportSummary);
     if (
@@ -96,15 +120,15 @@ async function refresh(): Promise<void> {
 function render(snapshot: DesktopSnapshot): void {
   latestSnapshot = snapshot;
   const environmentPill = byId("environment-pill");
-  environmentPill.textContent = snapshot.demoMode ? "Synthetic demo data" : snapshot.environment;
+  environmentPill.textContent = snapshot.demoMode ? "Practice data" : "Local data";
   environmentPill.className = `pill ${snapshot.demoMode ? "warn" : "neutral"}`;
 
   const mcpPill = byId("mcp-pill");
-  mcpPill.textContent = snapshot.mcp.state === "running" ? "MCP local · ready" : `MCP · ${snapshot.mcp.state}`;
+  mcpPill.textContent = snapshot.mcp.state === "running" ? "ChatGPT access · ready" : "ChatGPT · not connected";
   mcpPill.className = `pill ${snapshot.mcp.state === "running" ? "good" : "warn"}`;
 
   setText("account-count", String(snapshot.accounts.length));
-  setText("account-detail", `${snapshot.accounts.filter((account) => account.queryReady).length} ready for read-only queries`);
+  setText("account-detail", `${snapshot.accounts.filter((account) => account.queryReady).length} ready for ChatGPT questions`);
   setText("alert-count", String(snapshot.alerts.filter((alert) => alert.status === "open").length));
   setText("storage-state", snapshot.storage.state);
   setText("storage-detail", snapshot.storage.protection);
@@ -120,6 +144,7 @@ function render(snapshot: DesktopSnapshot): void {
   setText("provider-environment", snapshot.provider.configured ? snapshot.provider.environment : "Local-only");
   setText("connection-tunnel-status", snapshot.tunnel.state.replaceAll("-", " "));
   setText("footer-version", `Version ${snapshot.version} · ${new Date(snapshot.generatedAt).toLocaleString()}`);
+  updateProviderAvailability(snapshot);
   updatePathGuidance();
 
   renderAccountOverview(snapshot.accounts);
@@ -228,13 +253,21 @@ function renderAccountCards(accounts: AccountSummaryView[]): void {
     if (!account.active) {
       reconnect.title = "Add a new separately identified account entry to connect again without mixing source history.";
     }
-    reconnect.addEventListener("click", () =>
-      void performAction(
-        account.connectionType === "read_only_consent"
-          ? { kind: "authorize-us-account", accountId: account.id }
-          : { kind: "import-jp-statement", accountId: account.id }
-      )
-    );
+    reconnect.addEventListener("click", () => {
+      if (account.connectionType === "official_statement_import") {
+        void chooseStatementForAccount(account.id);
+        return;
+      }
+      if (!latestProviderReadiness?.canStartConsent) {
+        selectAccountPath(`US-${account.accountClass}`);
+        wizardStep = 2;
+        showWizardStep();
+        showSection("getting-started");
+        showToast("U.S. access is not configured yet. The setup guide explains what is needed and offers a safe local test.");
+        return;
+      }
+      void performAction({ kind: "authorize-us-account", accountId: account.id });
+    });
     const disconnect = element("button", "button danger-outline", "Disconnect");
     disconnect.type = "button";
     disconnect.disabled = !account.active;
@@ -321,6 +354,12 @@ async function addAccount(): Promise<void> {
     showToast("Enter an account label and owner/company name, then choose one of the four account types.");
     return;
   }
+  if (country === "US" && !latestProviderReadiness?.canStartConsent) {
+    updateAccountTypeGuidance();
+    byId("account-setup-availability").scrollIntoView({ behavior: "smooth", block: "center" });
+    showToast("U.S. connection is not available in this installation yet. No account was added. Open the guide for the safe local test or Japan import path.");
+    return;
+  }
   await performAction({
     kind: "add-account",
     country: country as "US" | "JP",
@@ -328,6 +367,14 @@ async function addAccount(): Promise<void> {
     label,
     legalEntityName
   });
+}
+
+async function chooseStatementForAccount(accountId: string): Promise<void> {
+  const select = byId("import-account") as HTMLSelectElement;
+  if ([...select.options].some((option) => option.value === accountId)) select.value = accountId;
+  showSection("imports");
+  byId("import-button").focus();
+  await performAction({ kind: "import-jp-statement", accountId });
 }
 
 async function importStatement(): Promise<void> {
@@ -549,23 +596,41 @@ function inputValue(id: string): string {
 
 function setupWizard(): void {
   document.querySelectorAll<HTMLButtonElement>("[data-account-path]").forEach((button) => {
-    if (button.dataset.accountPath === selectedAccountPath) button.classList.add("selected");
+    const selected = button.dataset.accountPath === selectedAccountPath;
+    button.classList.toggle("selected", selected);
+    button.setAttribute("aria-pressed", String(selected));
     button.addEventListener("click", () => {
-      selectedAccountPath = button.dataset.accountPath ?? "";
-      writeLocalSetting("amex-onboarding-path", selectedAccountPath);
-      document.querySelectorAll("[data-account-path]").forEach((candidate) =>
-        candidate.classList.toggle("selected", candidate === button)
-      );
-      updatePathGuidance();
+      selectAccountPath(button.dataset.accountPath ?? "");
     });
+  });
+  byId("choose-jp-personal").addEventListener("click", () => selectAccountPath("JP-personal"));
+  byId("wizard-safe-start").addEventListener("click", () => void startSafeTest());
+  byId("switch-to-safe-path").addEventListener("click", () => void startSafeTest("JP-personal"));
+  byId("review-us-requirements").addEventListener("click", () => {
+    const guidance = byId("path-guidance");
+    guidance.textContent = latestProviderReadiness
+      ? `${latestProviderReadiness.headline}. ${latestProviderReadiness.explanation}`
+      : "U.S. access needs a supported read-only data provider, reviewed OAuth consent settings, and protected Windows secret references. Until this page says Ready for consent, no U.S. account can be added and no sign-in will open. Never enter an Amex password here.";
+    guidance.classList.add("blocked");
+    byId("us-readiness-steps").hidden = false;
+    focusPanel("path-guidance");
   });
   byId("wizard-back").addEventListener("click", () => {
     wizardStep = Math.max(1, wizardStep - 1);
     showWizardStep();
   });
+  byId("wizard-start-over").addEventListener("click", () => {
+    selectAccountPath("");
+    wizardStep = 1;
+    showWizardStep();
+  });
   byId("wizard-next").addEventListener("click", () => {
     if (wizardStep === 2 && !selectedAccountPath) {
-      showToast("Choose one of the four account paths before continuing.");
+      showToast("Choose one of the available paths before continuing.");
+      return;
+    }
+    if (wizardStep === 2 && selectedAccountPath.startsWith("US-") && !latestProviderReadiness?.canStartConsent) {
+      showToast("This U.S. path needs provider setup first. Choose a Japan path or run the safe local test.");
       return;
     }
     wizardStep = Math.min(5, wizardStep + 1);
@@ -573,31 +638,186 @@ function setupWizard(): void {
   });
   byId("wizard-finish").addEventListener("click", () => {
     writeLocalSetting("amex-onboarding-complete", "true");
-    if (selectedAccountPath) (byId("add-account-type") as HTMLSelectElement).value = selectedAccountPath;
+    if (selectedAccountPath) {
+      const type = byId("add-account-type") as HTMLSelectElement;
+      const option = [...type.options].find((candidate) => candidate.value === selectedAccountPath);
+      if (option && !option.disabled) type.value = selectedAccountPath;
+      updateAccountTypeGuidance();
+      showSection("accounts");
+      (byId("add-account-label") as HTMLInputElement).focus();
+      showToast("Next, enter a nickname and owner or company. Do not enter a card number or password.");
+      return;
+    }
     showSection("overview");
-    showToast("Getting started is complete. You can reopen it from the sidebar or Settings.");
+    showToast("Safe local setup complete. No real account or external connection was created.");
   });
   showWizardStep();
 }
 
+function selectAccountPath(path: string): void {
+  selectedAccountPath = path;
+  writeLocalSetting("amex-onboarding-path", path);
+  document.querySelectorAll<HTMLElement>("[data-account-path]").forEach((candidate) => {
+    const selected = candidate.dataset.accountPath === path;
+    candidate.classList.toggle("selected", selected);
+    candidate.setAttribute("aria-pressed", String(selected));
+  });
+  updatePathGuidance();
+  updateSetupPlan();
+  updateFinishGuidance();
+  showWizardStep();
+}
+
+async function startSafeTest(path?: string): Promise<void> {
+  selectAccountPath(path ?? "");
+  wizardStep = 4;
+  showWizardStep();
+  await performAction("run-safe-test-drive");
+}
+
 function updatePathGuidance(): void {
+  const guidance = byId("path-guidance");
+  const recovery = byId("unavailable-path-actions");
+  byId("us-readiness-steps").hidden = true;
+  guidance.classList.remove("ready", "blocked");
+  recovery.hidden = true;
   if (!selectedAccountPath) {
-    setText("path-guidance", "Select one path to see its setup method.");
+    setText("path-guidance", "Select one path to see exactly what happens next.");
     return;
   }
   if (!selectedAccountPath.startsWith("US-")) {
+    guidance.classList.add("ready");
     setText(
       "path-guidance",
-      "Available now: create a local Japan import-only account, then preview and import an official CSV, XLSX, QIF, or text-based PDF statement. Scanned or encrypted PDFs are rejected, and the app never scrapes a website or asks for an Amex password."
+      "Ready now. Create a nickname-only local account, choose an official statement, review every parsed row, and approve the import. No Amex sign-in or password is used."
     );
     return;
   }
+  const configured = latestProviderReadiness?.canStartConsent === true;
+  guidance.classList.add(configured ? "ready" : "blocked");
+  recovery.hidden = configured;
   setText(
     "path-guidance",
-    latestSnapshot?.provider.configured
-      ? `Configured: ${latestSnapshot.provider.adapter} (${latestSnapshot.provider.environment}) supplies a normalized, read-only consent flow. Verify that this is your approved provider before continuing; this is not direct Amex connectivity, and the app never collects your Amex password.`
-      : "Not configured: U.S. accounts require your own approved read-only aggregation provider and OAuth settings. You may create the local label, but authorization and synchronization remain unavailable until that configuration is complete. This app does not provide direct Amex connectivity or collect your Amex password."
+    configured
+      ? `Ready for consent through the configured ${latestSnapshot?.provider.adapter} read-only provider. This is not direct Amex connectivity, and this app never asks for your Amex password.`
+      : latestProviderReadiness
+        ? `${latestProviderReadiness.headline}. ${latestProviderReadiness.explanation}`
+        : "Checking whether U.S. read-only consent is available. Until the check passes, no U.S. account can be added and no sign-in will open. You can run the safe local test or use a Japan statement import now."
   );
+}
+
+function updateProviderAvailability(snapshot: DesktopSnapshot): void {
+  const ready = latestProviderReadiness?.canStartConsent === true;
+  document.querySelectorAll<HTMLElement>("[data-account-path][data-provider-required='true']").forEach((card) => {
+    card.classList.toggle("unavailable", !ready);
+    // These cards remain keyboard-accessible so a first-time user can select
+    // one and receive the explanation/recovery choices. The actual Continue
+    // and account-creation actions stay disabled until readiness passes.
+    card.removeAttribute("aria-disabled");
+    const status = card.querySelector<HTMLElement>("[data-provider-status]");
+    if (status) {
+      status.textContent = ready ? "Ready for consent" : "Not available yet";
+      status.className = `path-status ${ready ? "current" : "future"}`;
+    }
+  });
+  const welcome = byId("welcome-us-availability");
+  welcome.classList.toggle("ready", ready);
+  welcome.classList.toggle("waiting", !ready);
+  setText("welcome-us-badge", ready ? "Ready for consent" : "Setup needed");
+  setText("welcome-us-copy", ready
+    ? `The configured ${snapshot.provider.adapter} provider can start a read-only consent flow. This is not direct Amex connectivity.`
+    : latestProviderReadiness?.explanation ?? "Checking for an approved read-only provider. This test build does not connect directly to Amex.");
+
+  const accountType = byId("add-account-type") as HTMLSelectElement;
+  for (const option of [...accountType.options]) {
+    if (option.dataset.providerRequired === "true") option.disabled = !ready;
+  }
+  if (accountType.selectedOptions[0]?.disabled) accountType.value = "JP-personal";
+  const availability = byId("account-setup-availability");
+  availability.classList.toggle("ready", ready);
+  availability.classList.toggle("waiting", !ready);
+  setText("account-availability-badge", ready ? "U.S. consent configured" : "Japan ready now");
+  setText("account-availability-title", ready ? "Japan imports and U.S. provider consent are available" : "Japan statement imports are ready to test");
+  setText("account-availability-copy", ready
+    ? "Choose the correct country and account class below. Every U.S. account requires its own read-only consent."
+    : "U.S. choices are disabled until an approved read-only provider is configured. Use Japan import or the safe test without real data.");
+  updateAccountTypeGuidance();
+  showWizardStep();
+}
+
+function renderProviderReadiness(readiness: UsProviderReadiness): void {
+  latestProviderReadiness = readiness;
+  const list = byId("us-readiness-steps");
+  list.replaceChildren();
+  for (const step of readiness.steps) {
+    const item = element("li");
+    item.append(
+      element("strong", undefined, `${step.status === "complete" ? "Ready" : step.status === "available" ? "Option" : "Action needed"}: ${step.label}`),
+      document.createTextNode(step.guidance)
+    );
+    list.append(item);
+  }
+  if (readiness.canStartConsent) list.hidden = true;
+  if (latestSnapshot) updateProviderAvailability(latestSnapshot);
+  updatePathGuidance();
+}
+
+function updateAccountTypeGuidance(): void {
+  const selection = (byId("add-account-type") as HTMLSelectElement).value;
+  const usSelected = selection.startsWith("US-");
+  const ready = latestProviderReadiness?.canStartConsent === true;
+  const guidance = byId("account-type-guidance");
+  const addButton = byId("add-account-button") as HTMLButtonElement;
+  guidance.classList.toggle("blocked", usSelected && !ready);
+  if (usSelected && !ready) {
+    guidance.innerHTML = "<strong>U.S. setup is not available yet.</strong> Open the step-by-step guide to see what is required. No account will be added and no sign-in will open.";
+    addButton.textContent = "Provider setup needed";
+    addButton.disabled = true;
+  } else if (usSelected) {
+    guidance.innerHTML = "<strong>Next:</strong> create the local label, then complete the configured provider’s read-only consent. The app never asks for an Amex password.";
+    addButton.textContent = "Continue to read-only consent";
+    addButton.disabled = false;
+  } else {
+    guidance.innerHTML = "<strong>Next:</strong> create the local account, then open Statement imports and choose an official statement. Nothing is imported until you approve the preview.";
+    addButton.textContent = "Create local Japan account";
+    addButton.disabled = false;
+  }
+}
+
+function updateSetupPlan(): void {
+  const list = byId("setup-plan-checklist");
+  list.replaceChildren();
+  const usPath = selectedAccountPath.startsWith("US-");
+  const classLabel = selectedAccountPath.endsWith("company") ? "company" : "personal";
+  setText("setup-plan-title", usPath ? `Set up a U.S. ${classLabel} card` : `Set up a Japan ${classLabel} card`);
+  setText("setup-plan-intro", usPath
+    ? "Each account gets separate read-only consent and keeps its own owner or company label."
+    : "The workflow stays local. Start with fake data, then repeat with an official statement when comfortable.");
+  const steps: Array<[string, string]> = usPath
+    ? [["Create a local label", "Use a nickname and owner/company only—never a card number or password."], ["Review provider consent", "Grant read-only access for this account only."], ["Check status", "The account is query-ready only after consent and synchronization succeed."], ["Choose portfolio access", "Explicitly choose whether it appears in combined local reports."]]
+    : [["Create a local label", "Use a nickname and owner/company only—never a card number or password."], ["Choose an official statement", "Use CSV, Excel, QIF, or a text-based PDF exported from Amex Japan."], ["Review every row", "Check dates, amount signs, warnings, duplicates, and reconciliation."], ["Approve or cancel", "Approval stores reviewed rows locally; cancel stores no transactions."], ["Choose portfolio access", "Explicitly choose whether it appears in combined local reports."]];
+  for (const [title, detail] of steps) {
+    const item = element("li");
+    item.append(element("strong", undefined, title), element("span", undefined, detail));
+    list.append(item);
+  }
+}
+
+function updateFinishGuidance(): void {
+  const finish = byId("wizard-finish") as HTMLButtonElement;
+  if (!selectedAccountPath) {
+    setText("finish-title", "Your safe local workspace is ready.");
+    setText("finish-guidance", "No real account or connection was created. Explore locally or return to this guide any time.");
+    finish.textContent = "Finish and explore locally";
+  } else if (selectedAccountPath.startsWith("JP-")) {
+    setText("finish-title", "Next: create your local Japan account.");
+    setText("finish-guidance", "Enter a nickname and owner/company, then choose an official statement. No Amex sign-in is involved.");
+    finish.textContent = "Finish and add my Japan account";
+  } else {
+    setText("finish-title", "Next: create the local label and review consent.");
+    setText("finish-guidance", "The configured read-only provider handles consent. Stop if anything asks this app for an Amex password.");
+    finish.textContent = "Finish and add my U.S. account";
+  }
 }
 
 function showWizardStep(): void {
@@ -609,8 +829,13 @@ function showWizardStep(): void {
   });
   setText("wizard-step-number", String(wizardStep));
   (byId("wizard-back") as HTMLButtonElement).disabled = wizardStep === 1;
-  (byId("wizard-next") as HTMLButtonElement).hidden = wizardStep === 5;
+  const next = byId("wizard-next") as HTMLButtonElement;
+  next.hidden = wizardStep === 5;
+  next.disabled = wizardStep === 2 && selectedAccountPath.startsWith("US-") && !latestProviderReadiness?.canStartConsent;
+  next.textContent = wizardStep === 2 ? "Continue to my plan" : wizardStep === 4 ? "Continue to finish" : "Continue";
   (byId("wizard-finish") as HTMLButtonElement).hidden = wizardStep !== 5;
+  if (wizardStep === 3) updateSetupPlan();
+  if (wizardStep === 5) updateFinishGuidance();
 }
 
 function renderTestDrive(result: LocalTestDriveResult): void {
@@ -736,6 +961,13 @@ function showToast(message: string): void {
   toastTimer = setTimeout(() => {
     toast.hidden = true;
   }, 6500);
+}
+
+function focusPanel(id: string): void {
+  const panel = byId(id);
+  panel.setAttribute("tabindex", "-1");
+  panel.focus({ preventScroll: true });
+  panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
 function cell(value: string): HTMLTableCellElement {

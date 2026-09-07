@@ -12,6 +12,7 @@ export type DesktopAction =
   | "open-export-folder"
   | "open-log-folder"
   | "open-tunnel-docs"
+  | "preflight-us-provider"
   | "run-safe-test-drive"
   | "save-synthetic-sample-statement"
   | "delete-all-local-data"
@@ -77,6 +78,38 @@ export interface LocalTestDriveCheck {
 export interface LocalTestDriveResult {
   passed: boolean;
   checks: LocalTestDriveCheck[];
+}
+
+export interface UsProviderReadinessStep {
+  id:
+    | "provider-access"
+    | "provider-settings"
+    | "windows-credentials"
+    | "restart-app"
+    | "choose-japan-import";
+  status: "complete" | "action-required" | "available";
+  label: string;
+  guidance: string;
+}
+
+export interface UsProviderReadiness {
+  state:
+    | "ready"
+    | "disabled"
+    | "storage-unavailable"
+    | "configuration-error"
+    | "credentials-missing"
+    | "credential-store-unavailable";
+  canStartConsent: boolean;
+  checkedAt: string;
+  headline: string;
+  explanation: string;
+  steps: UsProviderReadinessStep[];
+  safeguards: {
+    readOnly: true;
+    amexPasswordAccepted: false;
+    secretsExposed: false;
+  };
 }
 
 export interface AccountSummaryView {
@@ -159,6 +192,7 @@ export interface DesktopSnapshot {
 export interface DesktopActionResult {
   ok: boolean;
   message: string;
+  providerReadiness?: UsProviderReadiness;
   selectedFile?: {
     name: string;
     size: number;

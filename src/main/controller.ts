@@ -87,6 +87,7 @@ import {
   applyConfiguredCategoryMapping,
   assertCategoryMappingUnchanged
 } from "./category-mapping-workflow";
+import { preflightUsProvider } from "./us-provider-readiness";
 import { presentImportPreview } from "./import-preview-presentation";
 import { assertImportSourceUnchanged } from "./import-source-verifier";
 import {
@@ -107,6 +108,7 @@ const VALID_ACTIONS = new Set<DesktopAction>([
   "open-export-folder",
   "open-log-folder",
   "open-tunnel-docs",
+  "preflight-us-provider",
   "run-safe-test-drive",
   "save-synthetic-sample-statement",
   "delete-all-local-data",
@@ -346,9 +348,9 @@ export class DesktopController {
     if (this.configuration.demoMode) {
       notices.push("Synthetic demo records are enabled explicitly and remain separate from the encrypted production store.");
     }
-    if (this.configuration.raw.AMEX_US_AGGREGATOR === "disabled") {
-      notices.push("U.S. consent aggregation is disabled until an approved read-only provider is configured.");
-    }
+    // An unconfigured U.S. provider is an expected first-run capability state,
+    // not an error worth interrupting every screen with. The Getting Started
+    // and Accounts pages show that state persistently with actionable guidance.
     if (!this.dataOwnershipReady) {
       notices.push("Destructive cleanup is disabled because the configured data folders could not be proven app-owned.");
     }
@@ -1763,6 +1765,16 @@ export class DesktopController {
     };
   }
 
+  private async getUsProviderReadiness() {
+    return await preflightUsProvider({
+      configuration: this.configuration,
+      storageState: this.storageState,
+      runtimeAvailable: this.provider !== undefined,
+      ...(this.providerError === undefined ? {} : { runtimeError: this.providerError }),
+      credentialResolver: new WindowsGenericCredentialResolver()
+    });
+  }
+
   private async performRequest(request: DesktopRequest): Promise<DesktopActionResult> {
     this.touchActivity();
     if (typeof request === "string") return this.performAction(request);
@@ -1775,16 +1787,21 @@ export class DesktopController {
     switch (request.kind) {
       case "add-account": {
         if (request.country === "US") {
+          const providerReadiness = await this.getUsProviderReadiness();
+          if (!providerReadiness.canStartConsent) {
+            return {
+              ok: false,
+              message: providerReadiness.explanation,
+              providerReadiness
+            };
+          }
           const provider = this.provider;
           if (!provider || !active.addUsAccount) {
-            await dialog.showMessageBox(this.window!, {
-              type: "info",
-              title: "Approved U.S. provider required",
-              message: "No account was added and no sign-in was started.",
-              detail:
-                "Configure the reviewed approved-provider-generic read-only contract and Windows Credential Manager references first. This app never asks for or stores an Amex password."
-            });
-            return { ok: false, message: "U.S. setup requires a configured approved read-only provider." };
+            return {
+              ok: false,
+              message: "U.S. setup is not ready. No account was added and no sign-in was started.",
+              providerReadiness
+            };
           }
           let accountId: string;
           try {
@@ -1880,8 +1897,14 @@ export class DesktopController {
       case "prepare-export":
         return this.prepareExportPackage(request);
       case "authorize-us-account": {
+        const providerReadiness = await this.getUsProviderReadiness();
+        if (!providerReadiness.canStartConsent) {
+          return { ok: false, message: providerReadiness.explanation, providerReadiness };
+        }
         const provider = this.provider;
-        if (!provider) return { ok: false, message: "An approved U.S. read-only provider is not configured." };
+        if (!provider) {
+          return { ok: false, message: "U.S. setup is not ready.", providerReadiness };
+        }
         return await this.trackProviderOperation(this.authorizeUsAccount(active, provider, request.accountId));
       }
       case "sync-us-account": {
@@ -2053,15 +2076,16 @@ export class DesktopController {
     switch (action) {
       case "refresh":
         return await this.refreshProviderAccounts();
+      case "preflight-us-provider": {
+        const providerReadiness = await this.getUsProviderReadiness();
+        return {
+          ok: providerReadiness.canStartConsent,
+          message: providerReadiness.explanation,
+          providerReadiness
+        };
+      }
       case "authorize-us-account":
-        await dialog.showMessageBox(this.window!, {
-          type: "info",
-          title: "U.S. consent adapter not configured",
-          message: "No authorization was started.",
-          detail:
-            "Enable only a reviewed consent-based read-only provider adapter. This app never asks for or stores an Amex password."
-        });
-        return { ok: false, message: "U.S. authorization remains disabled until an approved provider is configured." };
+        return await this.performAction("preflight-us-provider");
       case "import-jp-statement":
         return {
           ok: false,
