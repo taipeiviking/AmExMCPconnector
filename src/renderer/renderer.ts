@@ -62,10 +62,12 @@ byId("restart-onboarding").addEventListener("click", () => {
   showWizardStep();
   showSection("getting-started");
 });
-byId("screenshot-protection-toggle").addEventListener("click", () => {
+const requestScreenshotToggle = (): void => {
   const enabled = latestSnapshot?.privacy.screenshotProtectionEnabled;
   if (enabled !== undefined) void performAction({ kind: "set-screenshot-protection", enabled: !enabled });
-});
+};
+byId("screenshot-quick-toggle").addEventListener("click", requestScreenshotToggle);
+byId("screenshot-protection-toggle").addEventListener("click", requestScreenshotToggle);
 byId("restore-screenshot-protection").addEventListener("click", () => {
   void performAction({ kind: "set-screenshot-protection", enabled: true });
 });
@@ -144,6 +146,8 @@ function render(snapshot: DesktopSnapshot): void {
   environmentPill.className = `pill ${snapshot.demoMode ? "warn" : "neutral"}`;
 
   const screenshotsAllowed = !snapshot.privacy.screenshotProtectionEnabled;
+  const screenshotQuickToggle = byId("screenshot-quick-toggle") as HTMLButtonElement;
+  screenshotQuickToggle.hidden = !snapshot.privacy.screenshotControlAvailable || screenshotsAllowed;
   byId("screenshot-pill").hidden = !screenshotsAllowed;
   byId("screenshot-warning").hidden = !screenshotsAllowed;
   const screenshotToggle = byId("screenshot-protection-toggle") as HTMLButtonElement;

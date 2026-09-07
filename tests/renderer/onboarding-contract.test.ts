@@ -48,6 +48,7 @@ describe("nontechnical onboarding contract", () => {
   });
 
   it("keeps screenshot capture a warned, session-only development control", () => {
+    expect(html).toContain('id="screenshot-quick-toggle"');
     expect(html).toContain('id="screenshot-protection-toggle"');
     expect(html).toContain("Allow screenshots this session");
     expect(html).toContain('id="screenshot-warning"');
@@ -55,6 +56,7 @@ describe("nontechnical onboarding contract", () => {
     expect(html).toContain("Screenshot capture is allowed for this session");
     expect(renderer).toContain('{ kind: "set-screenshot-protection", enabled: !enabled }');
     expect(renderer).toContain('{ kind: "set-screenshot-protection", enabled: true }');
+    expect(renderer).toContain("screenshotQuickToggle.hidden = !snapshot.privacy.screenshotControlAvailable || screenshotsAllowed");
     expect(renderer).toContain('screenshotToggle.hidden = !snapshot.privacy.screenshotControlAvailable');
     expect(controller).toContain("window.setContentProtection(enabled)");
     expect(controller).toContain("This Settings change is not saved");

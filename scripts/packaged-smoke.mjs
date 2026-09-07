@@ -78,12 +78,17 @@ try {
         screenshotProtectionEnabled: snapshot.privacy.screenshotProtectionEnabled,
         screenshotControlAvailable: snapshot.privacy.screenshotControlAvailable,
         screenshotSettingScope: snapshot.privacy.settingScope,
+        screenshotQuickToggleHidden: document.querySelector('#screenshot-quick-toggle')?.hidden,
         screenshotToggleHidden: document.querySelector('#screenshot-protection-toggle')?.hidden,
         screenshotWarningHidden: document.querySelector('#screenshot-warning')?.hidden,
         screenshotPillHidden: document.querySelector('#screenshot-pill')?.hidden
       }))`
     );
-    if (value?.bridgeReady !== true || value.screenshotToggleHidden !== false) {
+    if (
+      value?.bridgeReady !== true ||
+      value.screenshotQuickToggleHidden !== false ||
+      value.screenshotToggleHidden !== false
+    ) {
       throw new Error("sandboxed preload bridge or protected screenshot UI is not ready yet");
     }
     return value;
@@ -96,6 +101,7 @@ try {
     snapshot.screenshotProtectionEnabled !== true ||
     snapshot.screenshotControlAvailable !== true ||
     snapshot.screenshotSettingScope !== "session" ||
+    snapshot.screenshotQuickToggleHidden !== false ||
     snapshot.screenshotToggleHidden !== false ||
     snapshot.screenshotWarningHidden !== true ||
     snapshot.screenshotPillHidden !== true
