@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { ChildProcess, SpawnOptions } from "node:child_process";
@@ -59,6 +59,56 @@ describe("tunnel executable verification", () => {
     await expect(verifyTunnelExecutable(directoryNamedLikeExecutable, { platform: process.platform })).rejects.toMatchObject({
       code: "NOT_A_FILE",
     });
+  });
+
+  it.runIf(process.platform === "win32")(
+    "accepts a non-reparse Windows namespace alias and returns the canonical path",
+    async () => {
+      const directory = await temporaryDirectory();
+      const executable = join(directory, "trusted-alias-tunnel.exe");
+      const namespacedExecutable = `\\\\?\\${executable}`;
+      const namespacedDirectory = `\\\\?\\${directory}`;
+      const bytes = Buffer.from("namespace-alias executable bytes", "utf8");
+      await writeFile(executable, bytes);
+      const expectedSha256 = createHash("sha256").update(bytes).digest("hex");
+
+      await expect(verifyTunnelExecutable(namespacedExecutable, {
+        expectedSha256,
+        allowedDirectories: [namespacedDirectory],
+        platform: "win32",
+      })).resolves.toEqual({
+        canonicalPath: await realpath(executable),
+        sha256: expectedSha256,
+        sizeBytes: bytes.length,
+      });
+    },
+  );
+
+  it("rejects an executable reached through a symbolic-link or junction parent", async () => {
+    const root = await temporaryDirectory();
+    const targetDirectory = join(root, "canonical-target");
+    const linkedDirectory = join(root, "redirected-parent");
+    await mkdir(targetDirectory);
+    await symlink(targetDirectory, linkedDirectory, process.platform === "win32" ? "junction" : "dir");
+    const executable = join(targetDirectory, "linked-tunnel.exe");
+    await writeFile(executable, "linked executable bytes");
+
+    await expect(verifyTunnelExecutable(join(linkedDirectory, "linked-tunnel.exe"), {
+      allowedDirectories: [linkedDirectory],
+      platform: process.platform,
+    })).rejects.toMatchObject({ code: "REPARSE_POINT_REJECTED" });
+  });
+
+  it("rejects a canonical executable outside the approved directory", async () => {
+    const approvedDirectory = await temporaryDirectory();
+    const unapprovedDirectory = await temporaryDirectory();
+    const executable = join(unapprovedDirectory, "unapproved-tunnel.exe");
+    await writeFile(executable, "unapproved executable bytes");
+
+    await expect(verifyTunnelExecutable(executable, {
+      allowedDirectories: [approvedDirectory],
+      platform: process.platform,
+    })).rejects.toMatchObject({ code: "OUTSIDE_ALLOWED_DIRECTORY" });
   });
 });
 

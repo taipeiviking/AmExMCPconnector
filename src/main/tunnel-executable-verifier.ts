@@ -1,7 +1,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { lstat, realpath, stat } from "node:fs/promises";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 
 export type TunnelExecutableVerificationErrorCode =
   | "INVALID_PATH"
@@ -69,6 +69,7 @@ export async function verifyTunnelExecutable(
   }
 
   try {
+    if (platform === "win32") await assertNoWindowsReparseComponents(resolve(executablePath));
     const direct = await lstat(executablePath);
     if (direct.isSymbolicLink()) {
       throw new TunnelExecutableVerificationError(
@@ -84,7 +85,11 @@ export async function verifyTunnelExecutable(
     if (!canonicalStat.isFile()) {
       throw new TunnelExecutableVerificationError("NOT_A_FILE", "The tunnel client path is not a regular file.");
     }
-    if (!samePath(resolve(executablePath), resolve(canonicalPath), platform)) {
+    // On Windows, realpath may expand a non-reparse DOS 8.3 name or strip a
+    // \\?\ namespace prefix. Component lstat checks above reject actual
+    // symbolic links/junctions, so a remaining spelling-only difference is
+    // safe. Canonical containment and the pinned digest are checked below.
+    if (platform !== "win32" && !samePath(resolve(executablePath), resolve(canonicalPath), platform)) {
       throw new TunnelExecutableVerificationError(
         "REPARSE_POINT_REJECTED",
         "The tunnel client path resolves through a reparse point.",
@@ -114,6 +119,22 @@ export async function verifyTunnelExecutable(
       "The tunnel client executable could not be verified.",
       error,
     );
+  }
+}
+
+async function assertNoWindowsReparseComponents(path: string): Promise<void> {
+  const root = parse(path).root;
+  const child = relative(root, path);
+  let current = root;
+  for (const component of child.split(sep).filter((value) => value.length > 0)) {
+    current = join(current, component);
+    const entry = await lstat(current);
+    if (entry.isSymbolicLink()) {
+      throw new TunnelExecutableVerificationError(
+        "REPARSE_POINT_REJECTED",
+        "Symbolic-link or junction tunnel paths are not allowed.",
+      );
+    }
   }
 }
 
