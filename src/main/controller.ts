@@ -39,11 +39,21 @@ import {
 } from "../core";
 import { createElectronSafeStorageKeyProtector, isStorageError } from "../storage";
 import { WindowsGenericCredentialResolver } from "../security/windows-generic-credential-resolver";
+import { WindowsGenericCredentialStore } from "../security/windows-generic-credential-store";
+import {
+  SecretReferenceError,
+  type SecretReferenceResolver,
+  type SecretReferenceStore
+} from "../security/secret-reference";
 import {
   EncryptedProviderBindingStore,
   EncryptedVaultProviderTokenStore,
   GenericProviderOAuthClient,
   GenericReadOnlyProviderHttpClient,
+  PLAID_PROVIDER_ID,
+  PlaidApiClient,
+  PlaidHostedLinkProvider,
+  PlaidReadOnlyFinancialProvider,
   ProviderIntegrationError,
   UsProviderSyncService,
   assertCompatibleProviderAccount,
@@ -51,6 +61,7 @@ import {
   parseNormalizedV1Accounts,
   startLoopbackOAuthCallbackListener,
   type LoopbackOAuthCallbackSession,
+  type NormalizedV1ProviderAccount,
   type ProviderAuthorizationStatus,
   type ProviderDisconnectResult,
   type PreparedProviderRevocation,
@@ -89,6 +100,11 @@ import {
 } from "./category-mapping-workflow";
 import { preflightUsProvider } from "./us-provider-readiness";
 import { presentImportPreview } from "./import-preview-presentation";
+import {
+  readPlaidProviderSettings,
+  writePlaidProviderSettings,
+  type PlaidEnvironment
+} from "./plaid-provider-settings";
 import { assertImportSourceUnchanged } from "./import-source-verifier";
 import {
   configureOwnerPortfolio,
@@ -98,7 +114,7 @@ import {
 } from "./local-management";
 
 const CUSTOM_MCP_DOCS = "https://help.openai.com/en/articles/12584461-developer-mode-and-full-mcp-connectors-in-chatgpt-beta";
-const APPROVED_PROVIDER_ID = "approved-provider-generic";
+const PLAID_DASHBOARD = "https://dashboard.plaid.com/signup";
 const VALID_ACTIONS = new Set<DesktopAction>([
   "refresh",
   "authorize-us-account",
@@ -108,6 +124,7 @@ const VALID_ACTIONS = new Set<DesktopAction>([
   "open-export-folder",
   "open-log-folder",
   "open-tunnel-docs",
+  "open-plaid-dashboard",
   "preflight-us-provider",
   "run-safe-test-drive",
   "save-synthetic-sample-statement",
@@ -210,14 +227,24 @@ interface ProviderBinding {
   readonly lastFour?: string;
 }
 
-interface UsProviderRuntime {
+interface SharedUsProviderRuntime {
   readonly providerId: string;
-  readonly oauth: GenericProviderOAuthClient;
-  readonly financial: GenericReadOnlyProviderHttpClient;
   readonly tokens: EncryptedVaultProviderTokenStore;
   readonly bindings: EncryptedProviderBindingStore;
   readonly sync: UsProviderSyncService;
 }
+
+type UsProviderRuntime =
+  | (SharedUsProviderRuntime & {
+      readonly kind: "generic-loopback";
+      readonly oauth: GenericProviderOAuthClient;
+      readonly financial: GenericReadOnlyProviderHttpClient;
+    })
+  | (SharedUsProviderRuntime & {
+      readonly kind: "plaid-hosted-link";
+      readonly oauth: PlaidHostedLinkProvider;
+      readonly financial: PlaidReadOnlyFinancialProvider;
+    });
 
 interface ActiveRuntime {
   active: ActiveCore;
@@ -253,6 +280,8 @@ export class DesktopController {
   private readonly pendingJapanImports = new Map<string, PendingJapanImport>();
   private readonly screenshotControlAvailable: boolean;
   private screenshotProtectionEnabled: boolean;
+  private plaidEnvironment: PlaidEnvironment;
+  private plaidRedirectUri?: string;
 
   constructor(
     private readonly configuration: AppConfiguration,
@@ -261,6 +290,8 @@ export class DesktopController {
     this.screenshotControlAvailable =
       options.screenshotControlAvailable ?? configuration.environment !== "production";
     this.screenshotProtectionEnabled = configuration.screenshotProtection;
+    this.plaidEnvironment = configuration.raw.AMEX_US_AGGREGATOR_ENVIRONMENT;
+    this.plaidRedirectUri = configuration.raw.AMEX_US_PLAID_REDIRECT_URI;
     this.runtime = new SingleFlightResource(
       () => this.stageRuntime(),
       (resource) => this.disposeRuntime(resource)
@@ -426,7 +457,8 @@ export class DesktopController {
       provider: {
         configured: this.provider !== undefined,
         adapter: this.configuration.raw.AMEX_US_AGGREGATOR,
-        environment: this.configuration.raw.AMEX_US_AGGREGATOR_ENVIRONMENT
+        environment: this.plaidEnvironment,
+        setupSupported: this.configuration.raw.AMEX_US_AGGREGATOR === "plaid"
       },
       accounts: accounts.map((account) =>
         toAccountView(account, accountIdsWithData.has(account.id), portfolio?.accountIds.includes(account.id) ?? false)
@@ -463,6 +495,21 @@ export class DesktopController {
   private async stageRuntime(): Promise<ActiveRuntime> {
     this.dataOwnershipReady = await initializeLocalDataOwnership(this.localDataTargets());
     await mkdir(this.configuration.storage.dataDirectory, { recursive: true });
+    let providerSettingsError: string | undefined;
+    if (this.configuration.raw.AMEX_US_AGGREGATOR === "plaid") {
+      try {
+        const settings = await readPlaidProviderSettings(
+          this.configuration.storage.dataDirectory,
+          this.configuration.raw.AMEX_US_AGGREGATOR_ENVIRONMENT,
+          this.configuration.raw.AMEX_US_PLAID_REDIRECT_URI
+        );
+        this.plaidEnvironment = settings.environment;
+        this.plaidRedirectUri = settings.redirectUri;
+      } catch {
+        providerSettingsError =
+          "The saved Plaid environment setting is invalid. Open U.S. personal setup and save it again.";
+      }
+    }
     const encrypted = await this.openEncryptedRuntime();
     const providerTokens = new EncryptedVaultProviderTokenStore(
       encrypted.secrets,
@@ -474,10 +521,14 @@ export class DesktopController {
     );
     let exportRuntime: ExportRuntime | undefined;
     let provider: UsProviderRuntime | undefined;
-    let providerError: string | undefined;
+    let providerError: string | undefined = providerSettingsError;
     try {
       if (!this.configuration.demoMode) exportRuntime = await this.openExportRuntime(encrypted);
-      if (!this.configuration.demoMode && this.configuration.raw.AMEX_US_AGGREGATOR !== "disabled") {
+      if (
+        !this.configuration.demoMode &&
+        this.configuration.raw.AMEX_US_AGGREGATOR !== "disabled" &&
+        providerSettingsError === undefined
+      ) {
         try {
           provider = this.createUsProviderRuntime(encrypted, providerTokens, providerBindings);
         } catch (error) {
@@ -527,7 +578,7 @@ export class DesktopController {
               disconnectUsAccount: (accountId: string) =>
                 this.disconnectUsAccount(
                   encrypted,
-                  APPROVED_PROVIDER_ID,
+                  provider?.providerId ?? this.configuration.raw.AMEX_US_AGGREGATOR,
                   providerTokens,
                   providerBindings,
                   accountId
@@ -678,6 +729,58 @@ export class DesktopController {
     bindings: EncryptedProviderBindingStore
   ): UsProviderRuntime {
     const raw = this.configuration.raw;
+    if (raw.AMEX_US_AGGREGATOR === "plaid") {
+      const clientIdReference = raw.AMEX_US_AGGREGATOR_CLIENT_ID_REF;
+      const clientSecretReference = raw.AMEX_US_AGGREGATOR_CLIENT_SECRET_REF;
+      if (!clientIdReference || !clientSecretReference) {
+        throw new Error("The protected Plaid application credential references are incomplete.");
+      }
+      const resolver = new WindowsGenericCredentialResolver();
+      const api = new PlaidApiClient(
+        {
+          environment: this.plaidEnvironment,
+          clientIdReference,
+          secretReference: clientSecretReference,
+          requestTimeoutMs: this.configuration.mcp.requestTimeoutMs,
+          maximumResponseBytes: raw.AMEX_US_PROVIDER_MAX_RESPONSE_MB * 1024 * 1024
+        },
+        resolver
+      );
+      const oauth = new PlaidHostedLinkProvider(
+        {
+          clientName: "Amex Local Connector",
+          ...(this.plaidRedirectUri === undefined ? {} : { redirectUri: this.plaidRedirectUri }),
+          transactionHistoryDays: raw.AMEX_US_SYNC_LOOKBACK_DAYS
+        },
+        api,
+        tokenStore
+      );
+      const financial = new PlaidReadOnlyFinancialProvider(
+        {
+          maximumPageSize: this.configuration.mcp.maxPageSize,
+          defaultLookbackDays: raw.AMEX_US_SYNC_LOOKBACK_DAYS
+        },
+        api,
+        oauth
+      );
+      const sync = new UsProviderSyncService(encrypted.store, financial, bindings, {
+        providerId: PLAID_PROVIDER_ID,
+        portfolioId: this.configuration.defaults.portfolioId,
+        lookbackDays: raw.AMEX_US_SYNC_LOOKBACK_DAYS,
+        pageSize: this.configuration.mcp.maxPageSize,
+        alertsEnabled: raw.AMEX_ALERTS_ENABLED,
+        highValueUsd: String(raw.AMEX_ALERT_HIGH_VALUE_USD)
+      });
+      return {
+        kind: "plaid-hosted-link",
+        providerId: PLAID_PROVIDER_ID,
+        oauth,
+        financial,
+        tokens: tokenStore,
+        bindings,
+        sync
+      };
+    }
     if (raw.AMEX_US_AGGREGATOR !== "approved-provider-generic") {
       throw new Error(
         "Only the explicitly configured approved-provider-generic adapter is implemented; no Amex site scraping or guessed API is available."
@@ -755,7 +858,15 @@ export class DesktopController {
       alertsEnabled: raw.AMEX_ALERTS_ENABLED,
       highValueUsd: String(raw.AMEX_ALERT_HIGH_VALUE_USD)
     });
-    return { providerId, oauth, financial, tokens: tokenStore, bindings, sync };
+    return {
+      kind: "generic-loopback",
+      providerId,
+      oauth,
+      financial,
+      tokens: tokenStore,
+      bindings,
+      sync
+    };
   }
 
   private async resolveBearerToken(): Promise<string> {
@@ -1531,6 +1642,8 @@ export class DesktopController {
     let callbackSession: LoopbackOAuthCallbackSession | undefined;
     let consentCallbackAccepted = false;
     let consentCompleted = false;
+    let consentCreatedNewGrant = false;
+    let initialConsentBrowserOpened = false;
     let bindingSaved = false;
     let priorBinding: ProviderBinding | undefined;
     try {
@@ -1541,10 +1654,9 @@ export class DesktopController {
         return { ok: false, message: "Select an active U.S. consent account on this installation." };
       }
       priorBinding = await active.getProviderBinding?.(accountId);
-      const consent = await provider.oauth.beginConsent(accountId);
-      const authorizationUrl = new URL(consent.authorizationUrl);
-      const expectedState = authorizationUrl.searchParams.get("state");
-      if (!expectedState) throw new Error("The provider consent URL did not contain a state value.");
+      const consent = provider.kind === "plaid-hosted-link"
+        ? await provider.oauth.beginHostedConsent(accountId, priorBinding?.providerAccountId)
+        : await provider.oauth.beginConsent(accountId);
       await active.setProviderAuthorization(accountId, {
         providerId: provider.providerId,
         localAccountId: accountId,
@@ -1552,28 +1664,48 @@ export class DesktopController {
         checkedAt: new Date().toISOString(),
         expiresAt: consent.expiresAt
       });
-      callbackSession = await startLoopbackOAuthCallbackListener({
-        redirectUri: this.configuration.raw.AMEX_US_AGGREGATOR_REDIRECT_URI,
-        expectedState
-      });
-      this.consentSessions.set(accountId, callbackSession);
-      await shell.openExternal(consent.authorizationUrl);
-      const callback = await callbackSession.callback;
-      // From this point the provider may have created a grant even if token
-      // persistence or response validation fails locally.
-      consentCallbackAccepted = true;
-      const completed = await provider.oauth.completeConsent(accountId, callback);
-      consentCompleted = true;
+      let completed: ProviderAuthorizationStatus;
+      let providerAccount: NormalizedV1ProviderAccount;
+      if (provider.kind === "plaid-hosted-link") {
+        await shell.openExternal(consent.authorizationUrl);
+        initialConsentBrowserOpened = priorBinding === undefined;
+        const plaidCompletion = await provider.oauth.completeHostedConsent(accountId);
+        // The Hosted Link adapter has validated the exact selected card,
+        // persisted its per-account token, and removed any unpersisted Item on
+        // failure before returning here.
+        consentCallbackAccepted = true;
+        consentCompleted = true;
+        consentCreatedNewGrant = priorBinding === undefined;
+        completed = plaidCompletion.authorization;
+        providerAccount = plaidCompletion.account;
+      } else {
+        const authorizationUrl = new URL(consent.authorizationUrl);
+        const expectedState = authorizationUrl.searchParams.get("state");
+        if (!expectedState) throw new Error("The provider consent URL did not contain a state value.");
+        callbackSession = await startLoopbackOAuthCallbackListener({
+          redirectUri: this.configuration.raw.AMEX_US_AGGREGATOR_REDIRECT_URI,
+          expectedState
+        });
+        this.consentSessions.set(accountId, callbackSession);
+        await shell.openExternal(consent.authorizationUrl);
+        const callback = await callbackSession.callback;
+        // From this point the provider may have created a grant even if token
+        // persistence or response validation fails locally.
+        consentCallbackAccepted = true;
+        completed = await provider.oauth.completeConsent(accountId, callback);
+        consentCompleted = true;
+        consentCreatedNewGrant = true;
 
-      const discoveryResult = await provider.financial.listAccounts(accountId);
-      const discovered = parseNormalizedV1Accounts(discoveryResult.data);
-      if (discovered.length !== 1) {
-        throw new ProviderIntegrationError(
-          "INVALID_PROVIDER_RESPONSE",
-          "Individually authorized setup requires the provider to return exactly one account."
-        );
+        const discoveryResult = await provider.financial.listAccounts(accountId);
+        const discovered = parseNormalizedV1Accounts(discoveryResult.data);
+        if (discovered.length !== 1) {
+          throw new ProviderIntegrationError(
+            "INVALID_PROVIDER_RESPONSE",
+            "Individually authorized setup requires the provider to return exactly one account."
+          );
+        }
+        providerAccount = discovered[0]!;
       }
-      const providerAccount = discovered[0]!;
       assertCompatibleProviderAccount(account, providerAccount);
       if (providerAccount.status !== "active") {
         throw new ProviderIntegrationError(
@@ -1630,16 +1762,21 @@ export class DesktopController {
         return { ok: false, message: "Authorization stopped because the encrypted local store was locked or closed." };
       }
       if (isStorageError(error)) {
+        const newGrantMayExist = initialConsentBrowserOpened || (
+          provider.kind === "generic-loopback" && consentCallbackAccepted
+        );
         return this.handleAccountWriteFailure(
           active,
           error,
-          consentCallbackAccepted
+          newGrantMayExist
             ? "Encrypted provider authorization could not be saved atomically, so local queries were locked. A provider grant may have been created; revoke it in the provider portal before retrying."
-            : undefined
+            : consentCompleted && provider.kind === "plaid-hosted-link"
+              ? "The Plaid update repaired the existing connection, but its local status could not be saved atomically. The existing connection was not revoked; restart and retry the local status check."
+              : undefined
         );
       }
       let cleanupRevocation: ProviderDisconnectResult["remoteRevocation"] | undefined;
-      if (consentCompleted) {
+      if (consentCompleted && consentCreatedNewGrant) {
         try {
           cleanupRevocation = (await provider.oauth.disconnect(accountId)).remoteRevocation;
           if (bindingSaved) {
@@ -1656,6 +1793,18 @@ export class DesktopController {
           }
           cleanupRevocation = "failed";
         }
+      } else if (consentCompleted) {
+        // A Plaid update-mode flow repairs the existing Item and keeps the
+        // same token. Never remove that Item merely because a later local
+        // validation or metadata write failed.
+        cleanupRevocation = "not_configured";
+        if (bindingSaved && priorBinding !== undefined) {
+          try {
+            await provider.bindings.put(provider.providerId, accountId, priorBinding);
+          } catch (cleanupError) {
+            if (isStorageError(cleanupError)) return this.handleAccountWriteFailure(active, cleanupError);
+          }
+        }
       } else {
         provider.oauth.cancelConsent(accountId);
       }
@@ -1665,7 +1814,13 @@ export class DesktopController {
         return this.handleAccountWriteFailure(active, statusError);
       }
       const grantNotice = !consentCompleted
-        ? ""
+        ? initialConsentBrowserOpened && !(
+            error instanceof ProviderIntegrationError && error.code === "CONSENT_CANCELLED"
+          )
+          ? " A new Plaid connection may remain if remote cleanup could not be confirmed; review and revoke it in the Plaid portal before retrying."
+          : ""
+        : !consentCreatedNewGrant
+          ? " The existing provider connection was not revoked; retry the local check without creating another connection."
         : cleanupRevocation === "succeeded"
           ? " Any newly created provider grant was revoked."
           : " A provider grant may remain; revoke this connection in the provider portal before retrying.";
@@ -1788,8 +1943,225 @@ export class DesktopController {
       storageState: this.storageState,
       runtimeAvailable: this.provider !== undefined,
       ...(this.providerError === undefined ? {} : { runtimeError: this.providerError }),
-      credentialResolver: new WindowsGenericCredentialResolver()
+      credentialResolver: new WindowsGenericCredentialResolver(),
+      providerEnvironment: this.plaidEnvironment
     });
+  }
+
+  private async configurePlaid(input: Extract<DesktopRequest, { kind: "configure-plaid" }>): Promise<DesktopActionResult> {
+    if (this.configuration.raw.AMEX_US_AGGREGATOR !== "plaid") {
+      return { ok: false, message: "This installation is not using the built-in Plaid setup path." };
+    }
+    const active = this.active;
+    if (!active) return { ok: false, message: "Unlock local data before changing Plaid setup." };
+    const connected = (await active.listAllAccounts()).filter(
+      (account) => account.active && account.country === "US" && account.collectionMethod === "provider"
+    );
+    if (connected.length > 0) {
+      return {
+        ok: false,
+        message:
+          "Disconnect every active U.S. account before changing the Plaid environment or app credentials. This prevents saved account grants from being mixed across Plaid apps or Sandbox and Production."
+      };
+    }
+    const clientId = input.clientId.trim();
+    const clientSecret = input.clientSecret.trim();
+    const redirectUri = input.redirectUri?.trim();
+    if (redirectUri !== undefined && redirectUri.length > 0 && !isSafePlaidRedirectUri(redirectUri)) {
+      return {
+        ok: false,
+        message:
+          "The optional OAuth return URL must be a plain HTTPS URL already allowlisted in your Plaid Dashboard. It cannot contain credentials, a query, or a fragment."
+      };
+    }
+    try {
+      await this.verifyPlaidCredentials(input.environment, clientId, clientSecret);
+    } catch (error) {
+      return {
+        ok: false,
+        message: error instanceof ProviderIntegrationError
+          ? providerFailureMessage(error, "Plaid did not accept this setup.")
+          : "Plaid setup could not be verified. Check the selected environment, client ID, network connection, and matching secret. No account consent was created."
+      };
+    }
+
+    const clientIdReference = this.configuration.raw.AMEX_US_AGGREGATOR_CLIENT_ID_REF;
+    const clientSecretReference = this.configuration.raw.AMEX_US_AGGREGATOR_CLIENT_SECRET_REF;
+    if (!clientIdReference || !clientSecretReference) {
+      return { ok: false, message: "The protected Plaid credential references are unavailable." };
+    }
+    const resolver = new WindowsGenericCredentialResolver();
+    const store = new WindowsGenericCredentialStore();
+    let previousClientId: Uint8Array | undefined;
+    let previousClientSecret: Uint8Array | undefined;
+    const nextClientId = Buffer.from(clientId, "utf8");
+    const nextClientSecret = Buffer.from(clientSecret, "utf8");
+    let savedClientId = false;
+    let savedClientSecret = false;
+    try {
+      previousClientId = await resolveOptionalSecret(resolver, clientIdReference);
+      previousClientSecret = await resolveOptionalSecret(resolver, clientSecretReference);
+      await store.write(clientIdReference, nextClientId);
+      savedClientId = true;
+      await store.write(clientSecretReference, nextClientSecret);
+      savedClientSecret = true;
+      await writePlaidProviderSettings(
+        this.configuration.storage.dataDirectory,
+        input.environment,
+        input.environment === "production" && redirectUri ? redirectUri : undefined
+      );
+    } catch {
+      await Promise.allSettled([
+        restoreOptionalSecret(store, clientIdReference, previousClientId, savedClientId),
+        restoreOptionalSecret(store, clientSecretReference, previousClientSecret, savedClientSecret)
+      ]);
+      return {
+        ok: false,
+        message: "Plaid verified the values, but Windows could not save the complete credential pair. The prior credential state was restored where possible."
+      };
+    } finally {
+      nextClientId.fill(0);
+      nextClientSecret.fill(0);
+      previousClientId?.fill(0);
+      previousClientSecret?.fill(0);
+    }
+
+    this.plaidEnvironment = input.environment;
+    this.plaidRedirectUri = input.environment === "production" && redirectUri ? redirectUri : undefined;
+    try {
+      await this.reloadUnlockedRuntime();
+    } catch {
+      return {
+        ok: false,
+        message: "Plaid credentials were saved in Windows, but the encrypted runtime could not reload. Restart the tray app and check setup again."
+      };
+    }
+    const providerReadiness = await this.getUsProviderReadiness();
+    return {
+      ok: providerReadiness.canStartConsent,
+      message: providerReadiness.canStartConsent
+        ? `Plaid accepted the ${input.environment} app credentials and they are saved for this Windows user. You can now add a U.S. personal account and continue in the separate consent browser.${
+            input.environment === "production"
+              ? " This credential check does not guarantee that Plaid has enabled American Express and Transactions for your Production app; the consent attempt verifies that next."
+              : " Sandbox uses fake Plaid data only."
+          }`
+        : providerReadiness.explanation,
+      providerReadiness
+    };
+  }
+
+  private async verifyPlaidCredentials(
+    environment: PlaidEnvironment,
+    clientId: string,
+    clientSecret: string
+  ): Promise<void> {
+    const abortController = new AbortController();
+    const timeout = setTimeout(() => abortController.abort(), this.configuration.mcp.requestTimeoutMs);
+    timeout.unref?.();
+    try {
+      const response = await fetch(`https://${environment}.plaid.com/institutions/get`, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "PLAID-CLIENT-ID": clientId,
+          "PLAID-SECRET": clientSecret,
+          "Plaid-Version": "2020-09-14"
+        },
+        body: JSON.stringify({
+          count: 1,
+          offset: 0,
+          country_codes: ["US"],
+          options: { products: ["transactions"] }
+        }),
+        cache: "no-store",
+        credentials: "omit",
+        redirect: "error",
+        signal: abortController.signal
+      });
+      await response.body?.cancel().catch(() => undefined);
+      if (response.ok) return;
+      if (response.status === 400 || response.status === 401 || response.status === 403) {
+        throw new ProviderIntegrationError(
+          "PROVIDER_REJECTED",
+          "Plaid did not accept that client ID and secret for the selected environment."
+        );
+      }
+      throw new ProviderIntegrationError("PROVIDER_UNAVAILABLE", "Plaid is temporarily unavailable for setup verification.");
+    } catch (error) {
+      if (error instanceof ProviderIntegrationError) throw error;
+      throw new ProviderIntegrationError("PROVIDER_UNAVAILABLE", "Plaid could not be reached for setup verification.");
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  private async removePlaidCredentials(): Promise<DesktopActionResult> {
+    const active = this.active;
+    if (!active) return { ok: false, message: "Unlock local data before removing provider credentials." };
+    const connected = (await active.listAllAccounts()).filter(
+      (account) => account.active && account.country === "US" && account.collectionMethod === "provider"
+    );
+    if (connected.length > 0) {
+      return {
+        ok: false,
+        message: "Disconnect every active U.S. account first so the app can request remote Plaid revocation before its app credentials are removed."
+      };
+    }
+    const confirmation = await dialog.showMessageBox(this.window!, {
+      type: "warning",
+      title: "Remove Plaid app credentials?",
+      message: "Remove the saved Plaid client ID and secret from Windows Credential Manager?",
+      detail: "This does not close your Plaid developer account or change external copies. You can re-enter the credentials later from U.S. personal setup.",
+      buttons: ["Cancel", "Remove credentials"],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true
+    });
+    if (confirmation.response !== 1) return { ok: false, message: "Credential removal canceled." };
+    const clientIdReference = this.configuration.raw.AMEX_US_AGGREGATOR_CLIENT_ID_REF;
+    const clientSecretReference = this.configuration.raw.AMEX_US_AGGREGATOR_CLIENT_SECRET_REF;
+    if (!clientIdReference || !clientSecretReference) {
+      return { ok: false, message: "The protected Plaid credential references are unavailable." };
+    }
+    const store = new WindowsGenericCredentialStore();
+    try {
+      await Promise.all([store.delete(clientIdReference), store.delete(clientSecretReference)]);
+      await this.reloadUnlockedRuntime();
+    } catch {
+      return {
+        ok: false,
+        message: "Windows could not confirm removal of the complete Plaid credential pair. Check Windows Credential Manager before continuing."
+      };
+    }
+    const providerReadiness = await this.getUsProviderReadiness();
+    return {
+      ok: true,
+      message: "Plaid app credentials were removed from Windows Credential Manager. No Amex account data was sent or deleted.",
+      providerReadiness
+    };
+  }
+
+  private async reloadUnlockedRuntime(): Promise<void> {
+    if (this.lifecycleState !== "running" || this.quitting) {
+      throw new Error("The local runtime is already closing.");
+    }
+    this.lifecycleState = "locking";
+    this.clearAutoLockTimer();
+    try {
+      await this.cutExternalInterfaces(this.runtime.current);
+      await this.commandTail;
+      await this.runtime.release();
+      this.storageState = "locked";
+      this.storageError = undefined;
+      this.mcpError = undefined;
+      this.tunnelError = undefined;
+      this.providerError = undefined;
+    } finally {
+      if (!this.quitting) this.lifecycleState = "running";
+    }
+    await this.unlock();
+    if (!this.active) throw new Error("The encrypted local runtime did not reopen.");
   }
 
   private async performRequest(request: DesktopRequest): Promise<DesktopActionResult> {
@@ -1805,8 +2177,18 @@ export class DesktopController {
     if (!active) return { ok: false, message: "Unlock the encrypted local store before changing account settings." };
 
     switch (request.kind) {
+      case "configure-plaid":
+        return await this.configurePlaid(request);
+      case "remove-plaid-credentials":
+        return await this.removePlaidCredentials();
       case "add-account": {
         if (request.country === "US") {
+          if (request.accountClass !== "personal") {
+            return {
+              ok: false,
+              message: "U.S. company cards are not enabled in this test release. No account was added and no consent was started."
+            };
+          }
           const providerReadiness = await this.getUsProviderReadiness();
           if (!providerReadiness.canStartConsent) {
             return {
@@ -2024,7 +2406,7 @@ export class DesktopController {
                   accountIds: [account.id],
                   portfolioId: active.portfolioId,
                   metadata: {
-                    provider: APPROVED_PROVIDER_ID,
+                    provider: provider?.providerId ?? this.configuration.raw.AMEX_US_AGGREGATOR,
                     remoteRevocation
                   }
                 }));
@@ -2181,6 +2563,9 @@ export class DesktopController {
       case "open-tunnel-docs":
         await shell.openExternal(CUSTOM_MCP_DOCS);
         return { ok: true, message: "Opened the official OpenAI custom MCP setup documentation." };
+      case "open-plaid-dashboard":
+        await shell.openExternal(PLAID_DASHBOARD);
+        return { ok: true, message: "Opened Plaid's official dashboard in your browser." };
       case "run-safe-test-drive": {
         const snapshot = await this.getSnapshot();
         const testDrive = runLocalTestDrive({
@@ -2908,6 +3293,32 @@ function parseDesktopRequest(value: unknown): DesktopRequest | undefined {
     if (!isSafeIdentifier(candidate.accountId)) return undefined;
     return { kind: candidate.kind, accountId: candidate.accountId as string };
   }
+  if (candidate.kind === "configure-plaid") {
+    if (
+      !["sandbox", "production"].includes(String(candidate.environment)) ||
+      candidate.confirmedReadOnly !== true ||
+      !isSafeCredentialText(candidate.clientId, 256) ||
+      !isSafeCredentialText(candidate.clientSecret, 512) ||
+      (candidate.redirectUri !== undefined &&
+        candidate.redirectUri !== "" &&
+        !isSafePlaidRedirectUri(candidate.redirectUri))
+    ) {
+      return undefined;
+    }
+    return {
+      kind: "configure-plaid",
+      environment: candidate.environment as "sandbox" | "production",
+      clientId: (candidate.clientId as string).trim(),
+      clientSecret: (candidate.clientSecret as string).trim(),
+      ...(candidate.environment === "production" && candidate.redirectUri
+        ? { redirectUri: (candidate.redirectUri as string).trim() }
+        : {}),
+      confirmedReadOnly: true
+    };
+  }
+  if (candidate.kind === "remove-plaid-credentials") {
+    return { kind: "remove-plaid-credentials" };
+  }
   if (candidate.kind === "import-jp-statement") {
     if (!isSafeIdentifier(candidate.accountId)) return undefined;
     const values = [candidate.periodStart, candidate.periodEnd, candidate.openingBalance, candidate.closingBalance];
@@ -3009,6 +3420,66 @@ function isSafeLabel(value: unknown, maximum: number): value is string {
     value.trim().length <= maximum &&
     !/[\u0000-\u001F\u007F]/u.test(value)
   );
+}
+
+function isSafeCredentialText(value: unknown, maximum: number): value is string {
+  return (
+    typeof value === "string" &&
+    value.trim() === value &&
+    value.length >= 1 &&
+    value.length <= maximum &&
+    !/[\u0000-\u001F\u007F]/u.test(value)
+  );
+}
+
+function isSafePlaidRedirectUri(value: unknown): value is string {
+  if (
+    typeof value !== "string" ||
+    value.trim() !== value ||
+    value.length < 1 ||
+    value.length > 2048 ||
+    /[\u0000-\u001F\u007F]/u.test(value)
+  ) {
+    return false;
+  }
+  try {
+    const parsed = new URL(value);
+    return (
+      parsed.protocol === "https:" &&
+      parsed.username.length === 0 &&
+      parsed.password.length === 0 &&
+      parsed.search.length === 0 &&
+      parsed.hash.length === 0
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function resolveOptionalSecret(
+  resolver: SecretReferenceResolver,
+  reference: string
+): Promise<Uint8Array | undefined> {
+  try {
+    return await resolver.resolve(reference);
+  } catch (error) {
+    if (error instanceof SecretReferenceError && error.code === "SECRET_NOT_FOUND") return undefined;
+    throw error;
+  }
+}
+
+async function restoreOptionalSecret(
+  store: SecretReferenceStore,
+  reference: string,
+  previous: Uint8Array | undefined,
+  changed: boolean
+): Promise<void> {
+  if (!changed) return;
+  if (previous === undefined) {
+    await store.delete(reference);
+    return;
+  }
+  await store.write(reference, previous);
 }
 
 function isIsoDate(value: unknown): value is string {

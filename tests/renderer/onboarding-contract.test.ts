@@ -11,17 +11,24 @@ describe("nontechnical onboarding contract", () => {
     expect(html).toContain('id="wizard-safe-start"');
     expect(html).toContain("Recommended first");
     expect(html).toContain("Japan personal and company cards");
-    expect(html).toContain("This test build does not connect directly to Amex");
+    expect(html).toContain("Sandbox never connects to your real Amex account");
+    expect(html).toContain("Plaid Production approval");
   });
 
-  it("gates U.S. choices before account creation until preflight allows consent", () => {
-    expect(html.match(/data-provider-required="true"/g)).toHaveLength(4);
+  it("keeps U.S. personal actionable while gating consent until setup passes", () => {
+    expect(html).toContain('data-account-path="US-personal" data-us-personal="true"');
+    expect(html).toContain('value="US-personal" data-us-personal="true"');
+    expect(html).toContain('value="US-company" data-provider-required="true" disabled');
+    expect(html).toContain('id="save-plaid-settings"');
+    expect(html).toContain("Windows Credential Manager");
     expect(renderer).toContain('performAction("preflight-us-provider")');
     expect(renderer).toContain("latestProviderReadiness?.canStartConsent");
-    expect(renderer).toContain("addButton.disabled = true");
+    expect(renderer).toContain("showPlaidSetup();");
+    expect(renderer).toContain('addButton.textContent = "Set up U.S. personal access"');
     expect(renderer).toContain('card.removeAttribute("aria-disabled")');
     expect(renderer).toContain("showWizardStep();");
     expect(renderer).toContain("No account was added");
+    expect(renderer).toContain('kind: "configure-plaid"');
   });
 
   it("moves a Japan statement action to the visible import review workflow", () => {

@@ -355,6 +355,10 @@ function isAuthorizationError(errorCode: string, errorType?: string): boolean {
   return errorCode === "ITEM_LOGIN_REQUIRED" ||
     errorCode === "INVALID_ACCESS_TOKEN" ||
     errorCode === "ITEM_NOT_FOUND" ||
+    errorCode === "ACCESS_NOT_GRANTED" ||
+    errorCode === "ADDITIONAL_CONSENT_REQUIRED" ||
+    errorCode === "PENDING_DISCONNECT" ||
+    errorCode === "PENDING_EXPIRATION" ||
     errorType === "OAUTH_ERROR";
 }
 

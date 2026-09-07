@@ -34,7 +34,7 @@ const child = spawn(
       AMEX_MCP_AUTH_MODE: "loopback-only",
       OPENAI_TUNNEL_ENABLED: "false",
       OPENAI_TUNNEL_AUTO_START: "false",
-      AMEX_US_AGGREGATOR: "disabled",
+      AMEX_US_AGGREGATOR: "plaid",
       AMEX_FX_RATE_SOURCE: "manual",
       AMEX_EXPORT_REQUIRE_HUMAN_APPROVAL: "true",
       AMEX_TELEMETRY_ENABLED: "false",
@@ -142,6 +142,33 @@ try {
     `globalThis.amexConnector.performAction('run-safe-test-drive')`
   );
 
+  const plaidSetupResult = await retry(async () => {
+    const rendered = await evaluateInRenderer(
+      page.webSocketDebuggerUrl,
+      `(() => {
+        document.querySelector('[data-account-path="US-personal"]')?.click();
+        document.querySelector('#open-us-setup-from-wizard')?.click();
+        const result = {
+          accountsActive: document.querySelector('#accounts')?.classList.contains('active') === true,
+          setupVisible: document.querySelector('#plaid-setup-card')?.hidden === false,
+          personalUnavailable: document.querySelector('[data-account-path="US-personal"]')?.classList.contains('unavailable') === true,
+          personalOptionDisabled: document.querySelector('#add-account-type option[value="US-personal"]')?.disabled,
+          companyOptionDisabled: document.querySelector('#add-account-type option[value="US-company"]')?.disabled,
+          clientIdType: document.querySelector('#plaid-client-id')?.type,
+          clientSecretType: document.querySelector('#plaid-client-secret')?.type,
+          hasSandboxBank: document.querySelector('#plaid-setup-card')?.textContent?.includes('First Platypus Bank') === true,
+          hasFakeCredentials: document.querySelector('#plaid-setup-card')?.textContent?.includes('user_good') === true && document.querySelector('#plaid-setup-card')?.textContent?.includes('pass_good') === true
+        };
+        document.querySelector('#cancel-plaid-setup')?.click();
+        return result;
+      })()`
+    );
+    if (rendered?.accountsActive !== true || rendered?.setupVisible !== true) {
+      throw new Error(`Plaid setup UI has not settled yet: ${JSON.stringify(rendered)}`);
+    }
+    return rendered;
+  }, "actionable Plaid setup UI");
+
   await retry(async () => {
     const active = await evaluateInRenderer(
       page.webSocketDebuggerUrl,
@@ -164,13 +191,41 @@ try {
     wizardResult.stepCount !== 5 ||
     wizardResult.pathCount !== 4 ||
     testDrive?.ok !== true ||
-    testDrive.testDrive?.checks?.length !== 7
+    testDrive.testDrive?.checks?.length !== 7 ||
+    plaidSetupResult.personalUnavailable !== false ||
+    plaidSetupResult.personalOptionDisabled !== false ||
+    plaidSetupResult.companyOptionDisabled !== true ||
+    plaidSetupResult.clientIdType !== "password" ||
+    plaidSetupResult.clientSecretType !== "password" ||
+    plaidSetupResult.hasSandboxBank !== true ||
+    plaidSetupResult.hasFakeCredentials !== true
   ) {
     throw new Error(`unexpected rendered UI state: ${JSON.stringify({ accountResult, wizardResult, testDrive })}`);
   }
 
   const screenshotPath = process.env.AMEX_SMOKE_SCREENSHOT_PATH;
   if (screenshotPath) {
+    if (process.env.AMEX_SMOKE_SCREENSHOT_VIEW === "plaid-setup") {
+      await evaluateInRenderer(
+        page.webSocketDebuggerUrl,
+        `(() => {
+          document.querySelector('[data-account-path="US-personal"]')?.click();
+          document.querySelector('#open-us-setup-from-wizard')?.click();
+          document.querySelector('#plaid-setup-card')?.scrollIntoView({ block: 'start' });
+          return document.querySelector('#plaid-setup-card')?.hidden === false;
+        })()`
+      );
+    } else {
+      await evaluateInRenderer(
+        page.webSocketDebuggerUrl,
+        `(() => {
+          document.querySelector('#cancel-plaid-setup')?.click();
+          document.documentElement.style.scrollBehavior = 'auto';
+          window.scrollTo({ top: 0 });
+          return document.querySelector('#accounts')?.classList.contains('active') === true;
+        })()`
+      );
+    }
     const screenshot = await sendDevToolsCommand(page.webSocketDebuggerUrl, "Page.captureScreenshot", {
       format: "png",
       captureBeyondViewport: false
@@ -185,7 +240,7 @@ try {
     throw new Error(`unexpected health response: ${JSON.stringify(health)}`);
   }
 
-  process.stdout.write("Electron smoke test passed: encrypted first-run storage, trusted renderer IPC, five-step onboarding, dark Accounts cards, seven-check safe test drive, and loopback MCP are running.\n");
+  process.stdout.write("Electron smoke test passed: encrypted first-run storage, trusted renderer IPC, actionable U.S. personal Plaid setup, five-step onboarding, dark Accounts cards, seven-check safe test drive, and loopback MCP are running.\n");
 } catch (error) {
   const detail = output.slice(-30).join("");
   throw new Error(`${error instanceof Error ? error.message : String(error)}${detail ? `\nElectron output:\n${detail}` : ""}`);

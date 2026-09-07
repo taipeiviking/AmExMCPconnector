@@ -33,7 +33,9 @@ describe("U.S. provider readiness", () => {
     };
 
     const readiness = await preflightUsProvider({
-      configuration: loadConfiguration({ environment: baseEnvironment }),
+      configuration: loadConfiguration({
+        environment: { ...baseEnvironment, AMEX_US_AGGREGATOR: "disabled" }
+      }),
       storageState: "unlocked",
       runtimeAvailable: false,
       credentialResolver: resolver,

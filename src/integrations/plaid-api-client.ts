@@ -288,6 +288,10 @@ function plaidResponseError(status: number, data: unknown): ProviderIntegrationE
     errorCode === "ITEM_LOGIN_REQUIRED" ||
     errorCode === "INVALID_ACCESS_TOKEN" ||
     errorCode === "ITEM_NOT_FOUND" ||
+    errorCode === "ACCESS_NOT_GRANTED" ||
+    errorCode === "ADDITIONAL_CONSENT_REQUIRED" ||
+    errorCode === "PENDING_DISCONNECT" ||
+    errorCode === "PENDING_EXPIRATION" ||
     errorType === "OAUTH_ERROR"
   ) {
     return new ProviderIntegrationError(

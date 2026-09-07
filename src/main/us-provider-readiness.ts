@@ -14,6 +14,7 @@ export interface UsProviderReadinessInput {
   readonly runtimeAvailable: boolean;
   readonly runtimeError?: string;
   readonly credentialResolver: SecretReferenceResolver;
+  readonly providerEnvironment?: "sandbox" | "production";
   readonly now?: () => Date;
 }
 
@@ -54,6 +55,7 @@ export async function preflightUsProvider(
   }
 
   const raw = input.configuration.raw;
+  const plaid = raw.AMEX_US_AGGREGATOR === "plaid";
   if (raw.AMEX_US_AGGREGATOR === "disabled") {
     return result(
       "disabled",
@@ -94,8 +96,10 @@ export async function preflightUsProvider(
     return result(
       "configuration-error",
       checkedAt,
-      "U.S. provider settings need attention",
-      "The approved provider adapter could not be started safely. No account was added and no sign-in was opened.",
+      plaid ? "Plaid setup needs attention" : "U.S. provider settings need attention",
+      plaid
+        ? "The built-in Plaid read-only connector could not start safely. Re-save the U.S. personal setup or restart the tray app; no account was added and no sign-in was opened."
+        : "The approved provider adapter could not be started safely. No account was added and no sign-in was opened.",
       [
         step(
           "provider-settings",
@@ -140,14 +144,18 @@ export async function preflightUsProvider(
   return result(
     "ready",
     checkedAt,
-    "Ready for read-only provider consent",
-    "The approved provider adapter and both protected Windows credential references passed local checks. The next step may open that provider's consent page in your browser.",
+    plaid ? "Ready to connect a U.S. personal card" : "Ready for read-only provider consent",
+    plaid
+      ? `The Plaid ${input.providerEnvironment ?? raw.AMEX_US_AGGREGATOR_ENVIRONMENT} app credentials are present in Windows Credential Manager. The next step opens Plaid Hosted Link in your browser; your Amex sign-in is never entered in this app.`
+      : "The approved provider adapter and both protected Windows credential references passed local checks. The next step may open that provider's consent page in your browser.",
     [
       step(
         "provider-settings",
         "complete",
-        "Approved provider settings validated",
-        "The configured adapter uses explicit HTTPS endpoints, an IPv4 loopback callback, and reviewed read-only scopes."
+        plaid ? "Plaid connector settings loaded" : "Approved provider settings validated",
+        plaid
+          ? "The connector will use Plaid's fixed HTTPS API, Hosted Link, U.S. credit/charge-card filtering, and the Transactions product only. Production availability is checked during consent."
+          : "The configured adapter uses explicit HTTPS endpoints, an IPv4 loopback callback, and reviewed read-only scopes."
       ),
       step(
         "windows-credentials",
@@ -158,7 +166,7 @@ export async function preflightUsProvider(
       step(
         "provider-access",
         "available",
-        "Continue to provider consent",
+        plaid ? "Continue to Plaid Hosted Link" : "Continue to provider consent",
         "Review the provider page carefully and authorize only the single intended account. This app will never ask you to type an Amex password into its own window."
       )
     ],
@@ -177,8 +185,8 @@ function credentialFailure(checkedAt: string, error: unknown): UsProviderReadine
         step(
           "windows-credentials",
           "action-required",
-          "Add the referenced Windows credentials",
-          "Create or update the two Windows Generic Credentials named by your private provider configuration, then check setup again. Never enter an Amex password here."
+          "Save the provider app credentials",
+          "Use the built-in U.S. personal setup to save the client ID and matching environment secret in Windows Credential Manager. Never enter an Amex password here."
         ),
         japanImportStep()
       ]

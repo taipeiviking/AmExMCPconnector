@@ -3,6 +3,7 @@ node_modules/
 dist/
 release/
 coverage/
+artifacts/
 .vitest/
 .cache/
 *.tsbuildinfo

@@ -12,6 +12,7 @@ export type DesktopAction =
   | "open-export-folder"
   | "open-log-folder"
   | "open-tunnel-docs"
+  | "open-plaid-dashboard"
   | "preflight-us-provider"
   | "run-safe-test-drive"
   | "save-synthetic-sample-statement"
@@ -46,6 +47,15 @@ export type DesktopRequest =
   | { kind: "approve-jp-import"; previewId: string }
   | { kind: "cancel-jp-import"; previewId: string }
   | { kind: "authorize-us-account"; accountId: string }
+  | {
+      kind: "configure-plaid";
+      environment: "sandbox" | "production";
+      clientId: string;
+      clientSecret: string;
+      redirectUri?: string;
+      confirmedReadOnly: true;
+    }
+  | { kind: "remove-plaid-credentials" }
   | { kind: "set-screenshot-protection"; enabled: boolean }
   | {
       kind: "prepare-export";
@@ -188,6 +198,7 @@ export interface DesktopSnapshot {
     configured: boolean;
     adapter: string;
     environment: "sandbox" | "production";
+    setupSupported: boolean;
   };
   accounts: AccountSummaryView[];
   alerts: AlertSummaryView[];

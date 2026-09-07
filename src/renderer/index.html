@@ -88,9 +88,9 @@
                   <p>Import an official CSV, Excel, QIF, or text-based PDF statement. There is no website sign-in or password scraping.</p>
                 </div>
                 <div id="welcome-us-availability" class="availability-item waiting">
-                  <span id="welcome-us-badge" class="availability-badge">Setup needed</span>
-                  <strong>U.S. personal and company cards</strong>
-                  <p id="welcome-us-copy">A supported read-only data provider must be approved and configured first. This test build does not connect directly to Amex.</p>
+                  <span id="welcome-us-badge" class="availability-badge">Setup available</span>
+                  <strong>U.S. personal cards</strong>
+                  <p id="welcome-us-copy">Set up Plaid inside the app, then use its read-only consent flow. Sandbox uses fake data; a real Amex connection requires Plaid Production approval.</p>
                 </div>
               </div>
               <div class="promise-grid">
@@ -104,17 +104,18 @@
               <p class="eyebrow">Choose your account path</p>
               <h2>What would you eventually like to use?</h2>
               <p class="lead compact-lead">This choice only prepares the local screens. It never signs in, imports a statement, or shares data by itself.</p>
-              <div class="recommended-route"><strong>New here?</strong><span>Choose a Japan path to try a real local workflow today, or use the safe test with no real data.</span><button id="choose-jp-personal" class="button secondary" type="button">Choose Japan personal</button></div>
+              <div class="recommended-route"><strong>New here?</strong><span>Choose U.S. personal for the guided Plaid setup, or run the safe test without real financial data.</span><button id="choose-us-personal" class="button secondary" type="button">Choose U.S. personal</button></div>
               <div class="path-grid" role="list">
-                <button class="path-card" data-account-path="US-personal" data-provider-required="true"><span class="path-status future" data-provider-status>Not available yet</span><strong>U.S. personal card</strong><small data-provider-copy>Needs a separately approved read-only provider. It cannot be connected in this unconfigured test build.</small></button>
-                <button class="path-card" data-account-path="US-company" data-provider-required="true"><span class="path-status future" data-provider-status>Not available yet</span><strong>U.S. company card</strong><small data-provider-copy>Needs a separately approved read-only provider for each company authorization.</small></button>
+                <button class="path-card" data-account-path="US-personal" data-us-personal="true"><span class="path-status current" data-provider-status>Setup available</span><strong>U.S. personal card</strong><small data-provider-copy>Configure your own Plaid app here, then authorize one Amex card through Plaid's read-only flow.</small></button>
+                <button class="path-card unavailable" data-account-path="US-company" data-provider-required="true"><span class="path-status future">Not in this test release</span><strong>U.S. company card</strong><small>Kept unavailable until its separate business-account behavior can be verified.</small></button>
                 <button class="path-card" data-account-path="JP-personal"><span class="path-status current">Available</span><strong>Japan personal card</strong><small>Add a local label, then preview and import an official statement export. No website scraping.</small></button>
                 <button class="path-card" data-account-path="JP-company"><span class="path-status current">Available</span><strong>Japan company card</strong><small>Keeps the company/entity and business context attached to every transaction.</small></button>
               </div>
               <div id="path-guidance" class="selection-note" role="status" aria-live="polite">Select one path to see exactly what happens next.</div>
               <div id="unavailable-path-actions" class="inline-actions recovery-actions" hidden>
-                <button id="switch-to-safe-path" class="button primary" type="button">Use the safe local path instead</button>
-                <button id="review-us-requirements" class="button secondary" type="button">Show what U.S. access needs</button>
+                <button id="open-us-setup-from-wizard" class="button primary" type="button">Set up U.S. personal access</button>
+                <button id="switch-to-safe-path" class="button secondary" type="button">Use the safe local path instead</button>
+                <button id="review-us-requirements" class="button secondary" type="button">Show setup steps</button>
               </div>
               <ol id="us-readiness-steps" class="readiness-steps" hidden></ol>
             </article>
@@ -213,18 +214,34 @@
             <button class="button check-now" data-action="refresh"><span aria-hidden="true">✓</span> Check local status</button>
           </div>
           <article id="account-setup-availability" class="account-setup-availability" role="status" aria-live="polite">
-            <div><span id="account-availability-badge" class="availability-badge">Ready now</span><strong id="account-availability-title">Japan statement imports are ready to test</strong><small id="account-availability-copy">U.S. connections stay unavailable until an approved read-only provider is configured.</small></div>
+            <div><span id="account-availability-badge" class="availability-badge">U.S. setup included</span><strong id="account-availability-title">Start with your U.S. personal card</strong><small id="account-availability-copy">The app guides Plaid setup and read-only consent. Plaid Production approval is still required for a real Amex account.</small></div>
             <button id="open-guided-setup" class="button secondary" type="button">Open step-by-step guide</button>
           </article>
-          <article class="account-add-bar" aria-label="Add an account in three steps">
-            <label><span><b class="field-step">1</b> Account label</span><input id="add-account-label" maxlength="80" placeholder="e.g. Japan travel card" autocomplete="off" /></label>
-            <label><span><b class="field-step">2</b> Owner or company</span><input id="add-account-entity" maxlength="120" placeholder="e.g. Personal or Example KK" autocomplete="off" /></label>
-            <label><span><b class="field-step">3</b> Account type</span><select id="add-account-type"><option value="JP-personal">Japan · personal — ready</option><option value="JP-company">Japan · company — ready</option><option value="US-personal" data-provider-required="true">U.S. · personal — provider setup needed</option><option value="US-company" data-provider-required="true">U.S. · company — provider setup needed</option></select></label>
-            <button id="add-account-button" class="button primary" type="button">Create local Japan account</button>
+          <article id="plaid-setup-card" class="panel provider-setup" hidden>
+            <div class="provider-setup-heading">
+              <div><p class="eyebrow">U.S. personal · step-by-step</p><h3>Connect through your own Plaid app</h3></div>
+              <span id="plaid-setup-state" class="status warn">Credentials needed</span>
+            </div>
+            <p class="provider-intro">Plaid is a separate service. This connector requests only transaction access for U.S. credit/charge cards. Your Amex sign-in happens in the Plaid/Amex browser flow, never in this app.</p>
+            <ol class="provider-steps">
+              <li><b>1</b><div><strong>Create or open your Plaid developer account</strong><span>Use Sandbox first for a fake end-to-end test. In Plaid Link customization, set Account Select to “Enabled for one account.” Apply for Production before attempting a real Amex connection.</span><button id="open-plaid-dashboard" class="button secondary compact" type="button">Open Plaid dashboard</button></div></li>
+              <li><b>2</b><div><strong>Choose what you are testing</strong><label><span>Connection environment</span><select id="plaid-environment"><option value="sandbox">Sandbox — fake account, recommended first</option><option value="production">Production — real account, Plaid approval required</option></select></label><small id="plaid-environment-help">Sandbox never connects to your real Amex account.</small><p id="plaid-sandbox-help" class="sandbox-help"><strong>Sandbox browser test:</strong> choose <b>First Platypus Bank</b>, enter <code>user_good</code> / <code>pass_good</code>, and select its single credit card. These are Plaid's public fake test credentials—not your Amex login.</p><label id="plaid-redirect-field" hidden><span>OAuth return URL (optional on desktop)</span><input id="plaid-redirect-uri" type="url" maxlength="2048" autocomplete="off" spellcheck="false" placeholder="https://your-domain.example/plaid-return" /><small>If your Plaid setup uses one, enter the plain HTTPS URL already listed under Allowed redirect URIs. External-browser Hosted Link can work without it; it is not a secret.</small></label></div></li>
+              <li><b>3</b><div><strong>Enter the two Plaid app credentials</strong><div class="credential-grid"><label><span>Plaid client ID</span><input id="plaid-client-id" type="password" maxlength="256" autocomplete="off" spellcheck="false" placeholder="From Plaid dashboard → Keys" /></label><label><span id="plaid-secret-label">Plaid Sandbox secret</span><input id="plaid-client-secret" type="password" maxlength="512" autocomplete="off" spellcheck="false" placeholder="Never your Amex password" /></label></div><small>Saved for this Windows user in Windows Credential Manager. They are not written to <code>.env</code>, the database, logs, or Git.</small></div></li>
+              <li><b>4</b><div><strong>Confirm the boundary</strong><label class="provider-confirm"><input id="plaid-read-only-confirm" type="checkbox" /> I understand this is a read-only Transactions connection, I will select exactly one card, and these fields are Plaid app credentials—not my Amex username or password.</label></div></li>
+            </ol>
+            <div class="inline-actions provider-actions"><button id="save-plaid-settings" class="button primary" type="button">Check and save Plaid credentials</button><button id="cancel-plaid-setup" class="button secondary" type="button">Hide setup</button></div>
+            <div id="plaid-setup-result" class="operation-result empty-state" role="status" aria-live="polite">Nothing has been saved yet.</div>
+            <p class="guardrail">Production access is granted by Plaid, not by this installer. Do not paste an Amex password, card number, OAuth token, or account data into these fields.</p>
           </article>
-          <div id="account-type-guidance" class="account-type-guidance"><strong>Next:</strong> create the local account, then open Statement imports and choose an official statement file. Nothing is imported until you review and approve the preview.</div>
+          <article class="account-add-bar" aria-label="Add an account in three steps">
+            <label><span><b class="field-step">1</b> Account label</span><input id="add-account-label" maxlength="80" placeholder="e.g. My U.S. Amex" autocomplete="off" /></label>
+            <label><span><b class="field-step">2</b> Owner or company</span><input id="add-account-entity" maxlength="120" placeholder="e.g. Personal or Example KK" autocomplete="off" /></label>
+            <label><span><b class="field-step">3</b> Account type</span><select id="add-account-type"><option value="US-personal" data-us-personal="true">U.S. · personal — guided setup</option><option value="JP-personal">Japan · personal — ready</option><option value="JP-company">Japan · company — ready</option><option value="US-company" data-provider-required="true" disabled>U.S. · company — not in this test release</option></select></label>
+            <button id="add-account-button" class="button primary" type="button">Set up U.S. personal access</button>
+          </article>
+          <div id="account-type-guidance" class="account-type-guidance"><strong>Next:</strong> configure and verify Plaid, enter a nickname and owner, then continue to the separate browser consent flow.</div>
           <div id="accounts-cards" class="accounts-grid empty-state">No accounts configured.</div>
-          <p class="guardrail">Japan setup creates an encrypted import-only account. U.S. setup launches only a configured, approved read-only provider. This app never asks for an Amex password.</p>
+          <p class="guardrail">Japan setup creates an encrypted import-only account. U.S. personal setup uses Plaid Hosted Link and synchronizes Transactions only. This app never asks for or stores an Amex password.</p>
         </section>
 
         <section id="portfolio" class="page">
@@ -322,6 +339,7 @@
             <button id="restart-onboarding" class="settings-card"><strong>Getting started</strong><span>Open the account-path wizard and safe local test</span></button>
             <button class="settings-card" data-action="open-data-folder"><strong>Local data folder</strong><span>Encrypted database, key envelope, and import staging</span></button>
             <button class="settings-card" data-action="open-export-folder"><strong>Export folder</strong><span>Human-approved packages only</span></button>
+            <button id="remove-plaid-credentials" class="settings-card danger" type="button"><strong>Remove Plaid app credentials</strong><span>Deletes the client ID and secret from Windows Credential Manager; connected accounts must be disconnected separately</span></button>
             <button id="screenshot-protection-toggle" class="settings-card" type="button" hidden><strong id="screenshot-protection-title">Allow screenshots this session</strong><span id="screenshot-protection-detail">For development and testing only; this Settings choice is never saved.</span></button>
             <button class="settings-card danger" data-action="lock"><strong>Lock local data</strong><span>Hide the dashboard and close decrypted state where supported</span></button>
             <button class="settings-card danger" data-action="delete-all-local-data"><strong>Delete local financial data</strong><span>Inventoried app-owned paths only; preferences and external copies remain</span></button>
@@ -330,7 +348,7 @@
 
         <footer>
           <span id="footer-version">Version —</span>
-          <span>Independent local tool; not affiliated with American Express, Intuit, or Money Forward.</span>
+          <span>Independent local tool; not affiliated with American Express, Plaid, Intuit, or Money Forward.</span>
         </footer>
       </main>
     </div>

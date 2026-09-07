@@ -69,6 +69,16 @@ byId("screenshot-protection-toggle").addEventListener("click", () => {
 byId("restore-screenshot-protection").addEventListener("click", () => {
   void performAction({ kind: "set-screenshot-protection", enabled: true });
 });
+byId("open-plaid-dashboard").addEventListener("click", () => void performAction("open-plaid-dashboard"));
+byId("save-plaid-settings").addEventListener("click", () => void configurePlaid());
+byId("cancel-plaid-setup").addEventListener("click", () => {
+  byId("plaid-setup-card").hidden = true;
+});
+byId("plaid-environment").addEventListener("change", updatePlaidEnvironmentHelp);
+byId("remove-plaid-credentials").addEventListener("click", () => {
+  void performAction({ kind: "remove-plaid-credentials" });
+});
+updatePlaidEnvironmentHelp();
 
 showSection(readLocalSetting("amex-onboarding-complete") === "true" ? "overview" : "getting-started");
 void initializeRenderer();
@@ -87,7 +97,7 @@ function showSection(section: string): void {
   document.querySelectorAll(".nav-item").forEach((item) => item.classList.toggle("active", item.getAttribute("data-section") === section));
   document.querySelectorAll(".page").forEach((page) => page.classList.toggle("active", page.id === section));
   setText("page-title", titles[section] ?? "Overview");
-  document.querySelector("main")?.scrollTo({ top: 0, behavior: "smooth" });
+  window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
 async function performAction(request: DesktopRequest): Promise<void> {
@@ -164,7 +174,13 @@ function render(snapshot: DesktopSnapshot): void {
   setText("mcp-endpoint", snapshot.mcp.endpoint ?? "Disabled");
   setText(
     "provider-status",
-    snapshot.provider.configured ? `${snapshot.provider.adapter} · normalized read-only adapter` : "Not configured"
+    snapshot.provider.configured
+      ? snapshot.provider.adapter === "plaid"
+        ? "Plaid · U.S. personal Transactions only"
+        : `${snapshot.provider.adapter} · normalized read-only adapter`
+      : snapshot.provider.setupSupported
+        ? "Plaid setup available"
+        : "Not configured"
   );
   setText("provider-environment", snapshot.provider.configured ? snapshot.provider.environment : "Local-only");
   setText("connection-tunnel-status", snapshot.tunnel.state.replaceAll("-", " "));
@@ -381,8 +397,8 @@ async function addAccount(): Promise<void> {
   }
   if (country === "US" && !latestProviderReadiness?.canStartConsent) {
     updateAccountTypeGuidance();
-    byId("account-setup-availability").scrollIntoView({ behavior: "smooth", block: "center" });
-    showToast("U.S. connection is not available in this installation yet. No account was added. Open the guide for the safe local test or Japan import path.");
+    showPlaidSetup();
+    showToast("Complete the four U.S. personal setup steps first. No account was added and no Amex sign-in was opened.");
     return;
   }
   await performAction({
@@ -392,6 +408,83 @@ async function addAccount(): Promise<void> {
     label,
     legalEntityName
   });
+}
+
+function showPlaidSetup(): void {
+  const type = byId("add-account-type") as HTMLSelectElement;
+  type.value = "US-personal";
+  updateAccountTypeGuidance();
+  const panel = byId("plaid-setup-card");
+  panel.hidden = false;
+  panel.scrollIntoView({ behavior: "smooth", block: "start" });
+  (byId("plaid-environment") as HTMLSelectElement).focus();
+}
+
+function updatePlaidEnvironmentHelp(): void {
+  const production = (byId("plaid-environment") as HTMLSelectElement).value === "production";
+  byId("plaid-redirect-field").hidden = !production;
+  byId("plaid-sandbox-help").hidden = production;
+  setText("plaid-secret-label", production ? "Plaid Production secret" : "Plaid Sandbox secret");
+  setText(
+    "plaid-environment-help",
+    production
+      ? "Production can connect a real account only after Plaid has approved and enabled your app for Transactions."
+      : "Sandbox uses synthetic institutions and never connects to your real Amex account."
+  );
+}
+
+async function configurePlaid(): Promise<void> {
+  const environment = (byId("plaid-environment") as HTMLSelectElement).value;
+  const clientIdInput = byId("plaid-client-id") as HTMLInputElement;
+  const secretInput = byId("plaid-client-secret") as HTMLInputElement;
+  const redirectUriInput = byId("plaid-redirect-uri") as HTMLInputElement;
+  const confirmed = (byId("plaid-read-only-confirm") as HTMLInputElement).checked;
+  const resultPanel = byId("plaid-setup-result");
+  const saveButton = byId("save-plaid-settings") as HTMLButtonElement;
+  if (!clientIdInput.value.trim() || !secretInput.value.trim()) {
+    showToast("Enter the Plaid client ID and the secret for the selected environment.");
+    return;
+  }
+  if (!confirmed) {
+    showToast("Confirm the read-only boundary before saving provider credentials.");
+    return;
+  }
+  if (environment !== "sandbox" && environment !== "production") {
+    showToast("Choose Sandbox or Production.");
+    return;
+  }
+  saveButton.disabled = true;
+  resultPanel.classList.remove("empty-state");
+  resultPanel.textContent = `Checking whether Plaid accepts the ${environment} credentials… No account consent is being created.`;
+  try {
+    const result = await window.amexConnector.performAction({
+      kind: "configure-plaid",
+      environment,
+      clientId: clientIdInput.value.trim(),
+      clientSecret: secretInput.value.trim(),
+      ...(environment === "production" && redirectUriInput.value.trim()
+        ? { redirectUri: redirectUriInput.value.trim() }
+        : {}),
+      confirmedReadOnly: true
+    });
+    clientIdInput.value = "";
+    secretInput.value = "";
+    resultPanel.textContent = result.message;
+    showToast(result.message);
+    if (result.providerReadiness) renderProviderReadiness(result.providerReadiness);
+    if (result.ok) {
+      await refresh();
+      const readiness = await window.amexConnector.performAction("preflight-us-provider");
+      if (readiness.providerReadiness) renderProviderReadiness(readiness.providerReadiness);
+    }
+  } catch {
+    clientIdInput.value = "";
+    secretInput.value = "";
+    resultPanel.textContent = "Plaid setup could not be verified. No Amex credentials or account authorization were requested.";
+    showToast("Plaid setup could not be verified.");
+  } finally {
+    saveButton.disabled = false;
+  }
 }
 
 async function chooseStatementForAccount(accountId: string): Promise<void> {
@@ -628,15 +721,19 @@ function setupWizard(): void {
       selectAccountPath(button.dataset.accountPath ?? "");
     });
   });
-  byId("choose-jp-personal").addEventListener("click", () => selectAccountPath("JP-personal"));
+  byId("choose-us-personal").addEventListener("click", () => selectAccountPath("US-personal"));
   byId("wizard-safe-start").addEventListener("click", () => void startSafeTest());
   byId("switch-to-safe-path").addEventListener("click", () => void startSafeTest("JP-personal"));
+  byId("open-us-setup-from-wizard").addEventListener("click", () => {
+    showSection("accounts");
+    showPlaidSetup();
+  });
   byId("review-us-requirements").addEventListener("click", () => {
     const guidance = byId("path-guidance");
     guidance.textContent = latestProviderReadiness
       ? `${latestProviderReadiness.headline}. ${latestProviderReadiness.explanation}`
       : "U.S. access needs a supported read-only data provider, reviewed OAuth consent settings, and protected Windows secret references. Until this page says Ready for consent, no U.S. account can be added and no sign-in will open. Never enter an Amex password here.";
-    guidance.classList.add("blocked");
+    guidance.classList.add("setup");
     byId("us-readiness-steps").hidden = false;
     focusPanel("path-guidance");
   });
@@ -654,8 +751,8 @@ function setupWizard(): void {
       showToast("Choose one of the available paths before continuing.");
       return;
     }
-    if (wizardStep === 2 && selectedAccountPath.startsWith("US-") && !latestProviderReadiness?.canStartConsent) {
-      showToast("This U.S. path needs provider setup first. Choose a Japan path or run the safe local test.");
+    if (wizardStep === 2 && selectedAccountPath === "US-company") {
+      showToast("U.S. company connection is not enabled in this test release. Choose U.S. personal, a Japan path, or the safe test.");
       return;
     }
     wizardStep = Math.min(5, wizardStep + 1);
@@ -669,8 +766,13 @@ function setupWizard(): void {
       if (option && !option.disabled) type.value = selectedAccountPath;
       updateAccountTypeGuidance();
       showSection("accounts");
-      (byId("add-account-label") as HTMLInputElement).focus();
-      showToast("Next, enter a nickname and owner or company. Do not enter a card number or password.");
+      if (selectedAccountPath === "US-personal" && !latestProviderReadiness?.canStartConsent) {
+        showPlaidSetup();
+        showToast("Start with the numbered Plaid setup steps. Never enter an Amex password in this app.");
+      } else {
+        (byId("add-account-label") as HTMLInputElement).focus();
+        showToast("Next, enter a nickname and owner or company. Do not enter a card number or password.");
+      }
       return;
     }
     showSection("overview");
@@ -704,7 +806,7 @@ function updatePathGuidance(): void {
   const guidance = byId("path-guidance");
   const recovery = byId("unavailable-path-actions");
   byId("us-readiness-steps").hidden = true;
-  guidance.classList.remove("ready", "blocked");
+  guidance.classList.remove("ready", "setup", "blocked");
   recovery.hidden = true;
   if (!selectedAccountPath) {
     setText("path-guidance", "Select one path to see exactly what happens next.");
@@ -718,54 +820,61 @@ function updatePathGuidance(): void {
     );
     return;
   }
+  if (selectedAccountPath === "US-company") {
+    guidance.classList.add("blocked");
+    recovery.hidden = false;
+    setText("path-guidance", "U.S. company cards remain unavailable in this test release while their separate business-account behavior is verified. U.S. personal setup is available now.");
+    return;
+  }
   const configured = latestProviderReadiness?.canStartConsent === true;
-  guidance.classList.add(configured ? "ready" : "blocked");
-  recovery.hidden = configured;
+  guidance.classList.add(configured ? "ready" : "setup");
+  recovery.hidden = false;
   setText(
     "path-guidance",
     configured
       ? `Ready for consent through the configured ${latestSnapshot?.provider.adapter} read-only provider. This is not direct Amex connectivity, and this app never asks for your Amex password.`
       : latestProviderReadiness
         ? `${latestProviderReadiness.headline}. ${latestProviderReadiness.explanation}`
-        : "Checking whether U.S. read-only consent is available. Until the check passes, no U.S. account can be added and no sign-in will open. You can run the safe local test or use a Japan statement import now."
+        : "The guided Plaid setup is available now. Add your own Sandbox credentials for a fake test, or Production credentials after Plaid approval for a real Amex connection. No account is added until setup passes."
   );
 }
 
 function updateProviderAvailability(snapshot: DesktopSnapshot): void {
   const ready = latestProviderReadiness?.canStartConsent === true;
-  document.querySelectorAll<HTMLElement>("[data-account-path][data-provider-required='true']").forEach((card) => {
-    card.classList.toggle("unavailable", !ready);
-    // These cards remain keyboard-accessible so a first-time user can select
-    // one and receive the explanation/recovery choices. The actual Continue
-    // and account-creation actions stay disabled until readiness passes.
+  document.querySelectorAll<HTMLElement>("[data-account-path][data-us-personal='true']").forEach((card) => {
+    card.classList.remove("unavailable");
+    card.classList.toggle("setup-needed", !ready);
     card.removeAttribute("aria-disabled");
     const status = card.querySelector<HTMLElement>("[data-provider-status]");
     if (status) {
-      status.textContent = ready ? "Ready for consent" : "Not available yet";
+      status.textContent = ready ? "Ready to connect" : "Setup available";
       status.className = `path-status ${ready ? "current" : "future"}`;
     }
   });
   const welcome = byId("welcome-us-availability");
   welcome.classList.toggle("ready", ready);
   welcome.classList.toggle("waiting", !ready);
-  setText("welcome-us-badge", ready ? "Ready for consent" : "Setup needed");
+  setText("welcome-us-badge", ready ? "Ready to connect" : "Setup available");
   setText("welcome-us-copy", ready
-    ? `The configured ${snapshot.provider.adapter} provider can start a read-only consent flow. This is not direct Amex connectivity.`
-    : latestProviderReadiness?.explanation ?? "Checking for an approved read-only provider. This test build does not connect directly to Amex.");
+      ? `Plaid ${snapshot.provider.environment} credentials are present in Windows Credential Manager. Each U.S. personal card starts its own read-only Hosted Link consent.`
+    : "Open the built-in U.S. personal setup. Sandbox is a fake test; Production requires your own Plaid approval before a real Amex connection.");
 
   const accountType = byId("add-account-type") as HTMLSelectElement;
   for (const option of [...accountType.options]) {
-    if (option.dataset.providerRequired === "true") option.disabled = !ready;
+    if (option.dataset.usPersonal === "true") option.disabled = false;
+    if (option.value === "US-company") option.disabled = true;
   }
-  if (accountType.selectedOptions[0]?.disabled) accountType.value = "JP-personal";
+  if (accountType.selectedOptions[0]?.disabled) accountType.value = "US-personal";
   const availability = byId("account-setup-availability");
   availability.classList.toggle("ready", ready);
   availability.classList.toggle("waiting", !ready);
-  setText("account-availability-badge", ready ? "U.S. consent configured" : "Japan ready now");
-  setText("account-availability-title", ready ? "Japan imports and U.S. provider consent are available" : "Japan statement imports are ready to test");
+  setText("account-availability-badge", ready ? "U.S. personal ready" : "U.S. setup included");
+  setText("account-availability-title", ready ? "Your Plaid setup is ready for account consent" : "Start with your U.S. personal card");
   setText("account-availability-copy", ready
-    ? "Choose the correct country and account class below. Every U.S. account requires its own read-only consent."
-    : "U.S. choices are disabled until an approved read-only provider is configured. Use Japan import or the safe test without real data.");
+    ? `Choose U.S. personal below. ${snapshot.provider.environment === "sandbox" ? "This will use fake Sandbox data." : "A real account can connect only if Plaid enabled your Production app."}`
+    : "Open the numbered Plaid setup below. You can verify Sandbox without a real account, or use Production after provider approval.");
+  setText("plaid-setup-state", ready ? `Ready · ${snapshot.provider.environment}` : "Credentials needed");
+  byId("plaid-setup-state").className = `status ${ready ? "" : "warn"}`;
   updateAccountTypeGuidance();
   showWizardStep();
 }
@@ -793,11 +902,12 @@ function updateAccountTypeGuidance(): void {
   const ready = latestProviderReadiness?.canStartConsent === true;
   const guidance = byId("account-type-guidance");
   const addButton = byId("add-account-button") as HTMLButtonElement;
-  guidance.classList.toggle("blocked", usSelected && !ready);
+  guidance.classList.toggle("setup", usSelected && !ready);
+  guidance.classList.remove("blocked");
   if (usSelected && !ready) {
-    guidance.innerHTML = "<strong>U.S. setup is not available yet.</strong> Open the step-by-step guide to see what is required. No account will be added and no sign-in will open.";
-    addButton.textContent = "Provider setup needed";
-    addButton.disabled = true;
+    guidance.innerHTML = "<strong>Next:</strong> open the numbered Plaid setup, save your app credentials in Windows Credential Manager, and verify them. No account is added and no Amex sign-in opens during this setup check.";
+    addButton.textContent = "Set up U.S. personal access";
+    addButton.disabled = false;
   } else if (usSelected) {
     guidance.innerHTML = "<strong>Next:</strong> create the local label, then complete the configured provider’s read-only consent. The app never asks for an Amex password.";
     addButton.textContent = "Continue to read-only consent";
@@ -856,7 +966,7 @@ function showWizardStep(): void {
   (byId("wizard-back") as HTMLButtonElement).disabled = wizardStep === 1;
   const next = byId("wizard-next") as HTMLButtonElement;
   next.hidden = wizardStep === 5;
-  next.disabled = wizardStep === 2 && selectedAccountPath.startsWith("US-") && !latestProviderReadiness?.canStartConsent;
+  next.disabled = wizardStep === 2 && selectedAccountPath === "US-company";
   next.textContent = wizardStep === 2 ? "Continue to my plan" : wizardStep === 4 ? "Continue to finish" : "Continue";
   (byId("wizard-finish") as HTMLButtonElement).hidden = wizardStep !== 5;
   if (wizardStep === 3) updateSetupPlan();

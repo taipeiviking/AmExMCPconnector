@@ -63,11 +63,16 @@ const environmentSchema = z.object({
   OPENAI_TUNNEL_PROFILE: z.string().trim().min(1).default("amex-local"),
   OPENAI_TUNNEL_ID: optionalString,
 
-  AMEX_US_AGGREGATOR: z.enum(["disabled", "approved-provider-generic"]).default("disabled"),
+  AMEX_US_AGGREGATOR: z.enum(["disabled", "plaid", "approved-provider-generic"]).default("plaid"),
   AMEX_US_AGGREGATOR_ENVIRONMENT: z.enum(["sandbox", "production"]).default("sandbox"),
   AMEX_US_AGGREGATOR_BASE_URL: optionalString,
-  AMEX_US_AGGREGATOR_CLIENT_ID_REF: optionalString,
-  AMEX_US_AGGREGATOR_CLIENT_SECRET_REF: optionalString,
+  AMEX_US_AGGREGATOR_CLIENT_ID_REF: optionalString.default(
+    "wincred:AmexLocalFinanceConnector%2FPlaid%2FClientId"
+  ),
+  AMEX_US_AGGREGATOR_CLIENT_SECRET_REF: optionalString.default(
+    "wincred:AmexLocalFinanceConnector%2FPlaid%2FSecret"
+  ),
+  AMEX_US_PLAID_REDIRECT_URI: optionalString,
   AMEX_US_OAUTH_AUTHORIZATION_URL: optionalString,
   AMEX_US_OAUTH_TOKEN_URL: optionalString,
   AMEX_US_OAUTH_REVOCATION_URL: optionalString,
@@ -317,7 +322,7 @@ function enforceSecurityInvariants(environment: RawEnvironment): void {
     throw new Error("Tunnel mode requires a reviewed outbound client argument template.");
   }
 
-  if (environment.AMEX_US_AGGREGATOR !== "disabled") {
+  if (environment.AMEX_US_AGGREGATOR === "approved-provider-generic") {
     const missing = [
       environment.AMEX_US_AGGREGATOR_BASE_URL,
       environment.AMEX_US_AGGREGATOR_CLIENT_ID_REF,
@@ -328,6 +333,12 @@ function enforceSecurityInvariants(environment: RawEnvironment): void {
     if (missing) {
       throw new Error("Approved U.S. aggregation requires its base URL and protected client credential references.");
     }
+  }
+  if (
+    environment.AMEX_US_AGGREGATOR === "plaid" &&
+    (!environment.AMEX_US_AGGREGATOR_CLIENT_ID_REF || !environment.AMEX_US_AGGREGATOR_CLIENT_SECRET_REF)
+  ) {
+    throw new Error("Plaid setup requires protected Windows client credential references.");
   }
 
   if (environment.AMEX_FX_RATE_SOURCE === "provider" && !environment.AMEX_FX_PROVIDER_BASE_URL) {
