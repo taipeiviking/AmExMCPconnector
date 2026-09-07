@@ -185,6 +185,9 @@ export function environmentForRuntime(
     ? {
         ...environment,
         AMEX_APP_ENV: "production",
+        // Screenshot capture is a session-only UI choice in an explicitly
+        // marked unsigned alpha; no process setting may disable it at launch.
+        AMEX_SCREENSHOT_PROTECTION: "true",
         // A packaged first run stays local-only until the owner explicitly
         // provisions bearer authentication and enables an MCP transport.
         ...(environment.AMEX_MCP_MODE === undefined ? { AMEX_MCP_MODE: "disabled" } : {})
@@ -336,6 +339,9 @@ function enforceSecurityInvariants(environment: RawEnvironment): void {
   }
 
   if (environment.AMEX_APP_ENV === "production") {
+    if (!environment.AMEX_SCREENSHOT_PROTECTION) {
+      throw new Error("Screenshot protection cannot be disabled in production.");
+    }
     if (environment.AMEX_DEMO_MODE) throw new Error("Demo data is forbidden in production.");
     if (!environment.AMEX_EXPORT_REQUIRE_HUMAN_APPROVAL) {
       throw new Error("Human export approval cannot be disabled in production.");

@@ -74,17 +74,31 @@ try {
         storageState: snapshot.storage.state,
         mcpState: snapshot.mcp.state,
         demoMode: snapshot.demoMode,
-        environment: snapshot.environment
+        environment: snapshot.environment,
+        screenshotProtectionEnabled: snapshot.privacy.screenshotProtectionEnabled,
+        screenshotControlAvailable: snapshot.privacy.screenshotControlAvailable,
+        screenshotSettingScope: snapshot.privacy.settingScope,
+        screenshotToggleHidden: document.querySelector('#screenshot-protection-toggle')?.hidden,
+        screenshotWarningHidden: document.querySelector('#screenshot-warning')?.hidden,
+        screenshotPillHidden: document.querySelector('#screenshot-pill')?.hidden
       }))`
     );
-    if (value?.bridgeReady !== true) throw new Error("sandboxed preload bridge is not installed yet");
+    if (value?.bridgeReady !== true || value.screenshotToggleHidden !== false) {
+      throw new Error("sandboxed preload bridge or protected screenshot UI is not ready yet");
+    }
     return value;
   }, "packaged controller readiness", 10_000);
   if (
     snapshot?.storageState !== "unlocked" ||
     snapshot.mcpState !== "stopped" ||
     snapshot.demoMode !== false ||
-    snapshot.environment !== "production"
+    snapshot.environment !== "production" ||
+    snapshot.screenshotProtectionEnabled !== true ||
+    snapshot.screenshotControlAvailable !== true ||
+    snapshot.screenshotSettingScope !== "session" ||
+    snapshot.screenshotToggleHidden !== false ||
+    snapshot.screenshotWarningHidden !== true ||
+    snapshot.screenshotPillHidden !== true
   ) {
     throw new Error(`unexpected packaged snapshot: ${JSON.stringify(snapshot)}`);
   }
@@ -143,7 +157,7 @@ try {
   if (exitCode !== 0) throw new Error(`packaged app did not exit cleanly (code ${String(exitCode)})`);
 
   process.stdout.write(
-    "Packaged Windows smoke test passed: the unpacked production executable started with isolated encrypted storage, kept MCP disabled by default, saved account/portfolio controls, and exited through the application shutdown path.\n"
+    "Packaged Windows smoke test passed: the unsigned-alpha executable started protected with its session-only screenshot control available, used isolated encrypted storage, kept MCP disabled by default, saved account/portfolio controls, and exited through the application shutdown path.\n"
   );
 } catch (error) {
   const detail = output.slice(-30).join("");

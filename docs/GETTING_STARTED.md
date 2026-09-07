@@ -89,6 +89,12 @@ Provider contracts, OAuth settings, and Windows Credential Manager references ar
 
 ChatGPT's seven tools can read only explicitly selected account/portfolio data and explain review alerts. They cannot pay, transfer, control a card, dispute, authorize, sync, import, approve, export, change data, delete, or upload anything.
 
+## Development screenshots
+
+The unsigned local-alpha installer may show **Settings → Allow screenshots this session** for synthetic documentation testing. Use it only when every visible value is fake. Read and confirm the native warning, check for the **Screenshots allowed** badge and persistent warning, take the minimum necessary capture, then choose **Turn protection back on**. The choice is not saved; exiting and relaunching the app restores protection.
+
+Never disable protection or take a screenshot while a real statement, account, provider page, credential, token, personal local path, or other financial data is visible. Future signed/production builds do not expose this control. Source developers should follow [the isolated screenshot-run instructions](WINDOWS_SETUP.md#development-only-ui-screenshots).
+
 ## Learn more
 
 - [Windows setup and connected-mode boundaries](WINDOWS_SETUP.md)

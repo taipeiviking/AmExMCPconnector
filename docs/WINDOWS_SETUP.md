@@ -26,6 +26,20 @@ The copied `.env` is ignored and is development configuration only. Leave all `_
 
 Runtime files default to `%LOCALAPPDATA%\AmexLocalFinanceConnector`, outside the repository. Use **Settings → Delete local financial data** to inventory and remove app-owned encrypted data/import/export/log paths after two confirmations; it deliberately does not erase external copies, backups, onboarding preferences, tunnel profiles, or provider-side consent. Do not make the runtime directory a Git working directory.
 
+### Development-only UI screenshots
+
+Windows content protection is enabled by default and must remain enabled for production and any real financial data. If a developer needs a screenshot for documentation, use only synthetic local data:
+
+1. Exit every running app instance from the system tray; closing the dashboard is not enough.
+2. Confirm that no real statement, account data, provider consent page, credential, token, log, or identifying local path will be visible.
+3. Start the explicit screenshot run with `npm run dev:screenshots`. It enables demo data, uses the isolated `local-data/screenshot-development` directory, and disables content protection for that development run, so it cannot display the normal existing real-data store. If configuring the process manually, use `AMEX_APP_ENV=development`, `AMEX_DEMO_MODE=true`, an isolated `AMEX_DATA_DIR`, and `AMEX_SCREENSHOT_PROTECTION=false` only for that run.
+4. Capture only the synthetic app UI, inspect the image before saving or sharing it, then exit the tray app.
+5. Restore `AMEX_SCREENSHOT_PROTECTION=true` and restart before opening or importing real data.
+
+The environment setting is read when the process starts. Production configuration rejects `false`. Windows content protection is defense in depth rather than protection from cameras or sufficiently privileged capture software, so sensitive screens still must not be captured.
+
+Every packaged launch forces protection on, even if a process environment tries to disable it. The repository's `npm run package:win` path creates an explicitly marked **unsigned-alpha** artifact that then shows **Settings → Allow screenshots this session** for synthetic documentation work. Disabling requires a native confirmation and immediately displays a **Screenshots allowed** badge and persistent warning. Choose **Turn protection back on** when finished. The choice is never persisted, so fully exiting and relaunching the app restores protection. Future signed/production artifacts do not expose this control; a missing or invalid build-channel marker also hides it.
+
 ## Local-only mode
 
 Packaged production starts with `AMEX_MCP_MODE=disabled`. To enable local MCP for persistent financial data, set `AMEX_MCP_MODE=local`, keep `AMEX_MCP_HOST=127.0.0.1`, leave `OPENAI_TUNNEL_ENABLED=false`, select `AMEX_MCP_AUTH_MODE=bearer`, and point `AMEX_MCP_BEARER_TOKEN_REF` to a strong random token in the current user's Windows Generic Credential store. The tray app then starts a bearer-protected loopback Streamable HTTP endpoint at `http://127.0.0.1:43121/mcp`. The endpoint exposes read-only financial queries; account setup, imports, exports, and approvals remain desktop-only. Development synthetic test mode may use `loopback-only`; production rejects it.

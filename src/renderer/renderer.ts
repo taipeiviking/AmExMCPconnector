@@ -62,6 +62,13 @@ byId("restart-onboarding").addEventListener("click", () => {
   showWizardStep();
   showSection("getting-started");
 });
+byId("screenshot-protection-toggle").addEventListener("click", () => {
+  const enabled = latestSnapshot?.privacy.screenshotProtectionEnabled;
+  if (enabled !== undefined) void performAction({ kind: "set-screenshot-protection", enabled: !enabled });
+});
+byId("restore-screenshot-protection").addEventListener("click", () => {
+  void performAction({ kind: "set-screenshot-protection", enabled: true });
+});
 
 showSection(readLocalSetting("amex-onboarding-complete") === "true" ? "overview" : "getting-started");
 void initializeRenderer();
@@ -122,6 +129,24 @@ function render(snapshot: DesktopSnapshot): void {
   const environmentPill = byId("environment-pill");
   environmentPill.textContent = snapshot.demoMode ? "Practice data" : "Local data";
   environmentPill.className = `pill ${snapshot.demoMode ? "warn" : "neutral"}`;
+
+  const screenshotsAllowed = !snapshot.privacy.screenshotProtectionEnabled;
+  byId("screenshot-pill").hidden = !screenshotsAllowed;
+  byId("screenshot-warning").hidden = !screenshotsAllowed;
+  const screenshotToggle = byId("screenshot-protection-toggle") as HTMLButtonElement;
+  screenshotToggle.hidden = !snapshot.privacy.screenshotControlAvailable;
+  screenshotToggle.classList.toggle("capture-allowed", screenshotsAllowed);
+  screenshotToggle.setAttribute("aria-pressed", String(screenshotsAllowed));
+  setText(
+    "screenshot-protection-title",
+    screenshotsAllowed ? "Turn screenshot protection back on" : "Allow screenshots this session"
+  );
+  setText(
+    "screenshot-protection-detail",
+    screenshotsAllowed
+      ? "Capture protection is off. Turn it back on before showing personal financial data."
+      : "For development and testing only; this Settings choice is never saved."
+  );
 
   const mcpPill = byId("mcp-pill");
   mcpPill.textContent = snapshot.mcp.state === "running" ? "ChatGPT access · ready" : "ChatGPT · not connected";

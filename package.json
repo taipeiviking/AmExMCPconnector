@@ -1,6 +1,6 @@
 {
   "name": "amex-local-finance-connector",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "Local-first Windows desktop connector for read-only American Express financial data access over MCP.",
   "author": "AmEx MCP Connector contributors",
@@ -18,17 +18,18 @@
   },
   "scripts": {
     "clean": "node scripts/clean.mjs",
-    "build": "npm run clean && tsc -p tsconfig.json && node scripts/copy-assets.mjs",
+    "build": "npm run clean && tsc -p tsconfig.json && node scripts/copy-assets.mjs && node scripts/write-build-channel.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "scan:secrets": "node scripts/scan-secrets.mjs",
     "start": "electron .",
     "dev": "npm run build && electron .",
+    "dev:screenshots": "cross-env AMEX_SCREENSHOT_PROTECTION=false AMEX_DEMO_MODE=true AMEX_DATA_DIR=./local-data/screenshot-development npm run dev",
     "dev:demo": "npm run build && cross-env AMEX_DEMO_MODE=true electron .",
     "smoke:electron": "node scripts/electron-smoke.mjs",
     "smoke:packaged": "node scripts/packaged-smoke.mjs",
-    "package:win": "npm run build && electron-builder --win nsis",
+    "package:win": "cross-env AMEX_BUILD_CHANNEL=unsigned-alpha npm run build && electron-builder --win nsis",
     "verify": "npm run scan:secrets && npm run typecheck && npm test && npm run build && npm run smoke:electron"
   },
   "dependencies": {

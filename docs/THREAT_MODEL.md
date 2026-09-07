@@ -1,7 +1,7 @@
 # Threat Model
 
 Status: release-gating design document
-Last reviewed: 2026-08-31
+Last reviewed: 2026-09-07
 Method: asset/trust-boundary analysis with STRIDE-style threat enumeration
 
 ## Executive summary
@@ -136,6 +136,7 @@ After explicit approval, sensitive files leave the encrypted application store. 
 - Use a restrictive CSP; prevent arbitrary navigation, popups, external protocol execution, and untrusted HTML injection.
 - Open authorization pages only after origin allowlist validation and always show the destination host to the user.
 - Hide sensitive notification content by default and clear clipboard data only if the app deliberately writes it.
+- Request Windows content protection on financial windows by default and require protected startup in production. Permit disabling it only for an explicit isolated source development/test run or a confirmed, session-only unsigned-alpha control, always with synthetic data and never with real accounts, statements, provider pages, secrets, or identifying local paths. Restore protection immediately after capture; installed-alpha relaunch must reset it. Treat this OS control as defense in depth, not protection from cameras or privileged capture software.
 
 ### MCP and tunnel hardening
 
@@ -202,7 +203,7 @@ Ratings are qualitative. “Residual” assumes the listed controls are implemen
 | T-27 | Export, backup, or raw import in a synced/shared folder leaks data. | High | Destination warning/detection where feasible, explicit selection, default private directory, encryption option for backups, retention UI. | Medium: owner can deliberately copy files. |
 | T-28 | Audit log is erased or forged to hide access. | High | Append-only API, sequence/hash chain, restricted ACL, integrity verification, backup option, alert on discontinuity. | Medium/high: no independent remote anchor; admin can forge. |
 | T-29 | Compromised dependency, installer, update, or signing key executes code as the user. | Critical | Lockfile, SBOM, scans, provenance, signed artifacts/updates, protected signing, staged rollout, rollback controls. | Medium. |
-| T-30 | Sensitive data appears in tray notifications, recent-file lists, clipboard, thumbnails, or Windows search index. | Medium | Generic notifications, private directories, no automatic clipboard use, file attribute/indexing guidance, UI privacy review. | Low/medium. |
+| T-30 | Sensitive data appears in screenshots, tray notifications, recent-file lists, clipboard, thumbnails, or Windows search index. | High | Protected production startup; synthetic-only source and marked unsigned-alpha screenshot exceptions; native confirmation, visible warning, session reset, generic notifications, private directories, no automatic clipboard use, file attribute/indexing guidance, UI privacy review. | Medium: cameras, privileged capture software, and user-directed copies remain possible. |
 | T-31 | Clock rollback or timezone confusion changes token, statement, audit, or duplicate logic. | Medium | Store UTC instants plus source local date/zone, monotonic durations for timeouts, detect major clock changes, explicit period rules. | Low/medium. |
 | T-32 | Disconnect/uninstall is mistaken for secure deletion, leaving tokens or data behind. | High | Separate revoke/disconnect/delete semantics, deletion preview, vault cleanup, uninstall retention disclosure, verification. | Medium: SSD/backup remanence can persist. |
 

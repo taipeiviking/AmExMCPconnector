@@ -229,6 +229,10 @@ interface ActiveRuntime {
   tunnelError?: string;
 }
 
+export interface DesktopControllerOptions {
+  readonly screenshotControlAvailable?: boolean;
+}
+
 export class DesktopController {
   private window?: BrowserWindow;
   private tray?: Tray;
@@ -247,8 +251,16 @@ export class DesktopController {
   private readonly consentSessions = new Map<string, LoopbackOAuthCallbackSession>();
   private consentOwnerAccountId?: string;
   private readonly pendingJapanImports = new Map<string, PendingJapanImport>();
+  private readonly screenshotControlAvailable: boolean;
+  private screenshotProtectionEnabled: boolean;
 
-  constructor(private readonly configuration: AppConfiguration) {
+  constructor(
+    private readonly configuration: AppConfiguration,
+    options: DesktopControllerOptions = {}
+  ) {
+    this.screenshotControlAvailable =
+      options.screenshotControlAvailable ?? configuration.environment !== "production";
+    this.screenshotProtectionEnabled = configuration.screenshotProtection;
     this.runtime = new SingleFlightResource(
       () => this.stageRuntime(),
       (resource) => this.disposeRuntime(resource)
@@ -277,7 +289,7 @@ export class DesktopController {
     // its initial snapshot cannot become permanently stale at "zero accounts".
     await this.unlock();
     this.window = createDashboardWindow({
-      screenshotProtection: this.configuration.screenshotProtection,
+      screenshotProtection: this.screenshotProtectionEnabled,
       devTools: this.configuration.environment !== "production" && !app.isPackaged,
       onRequestClose: () => this.window?.hide()
     });
@@ -398,6 +410,11 @@ export class DesktopController {
         state: this.storageState,
         protection: "AES-256-GCM database · Windows safeStorage/DPAPI-wrapped key",
         dataDirectory: this.configuration.storage.dataDirectory
+      },
+      privacy: {
+        screenshotProtectionEnabled: this.screenshotProtectionEnabled,
+        screenshotControlAvailable: this.screenshotControlAvailable,
+        settingScope: "session"
       },
       mcp: {
         state: this.mcp?.status.state ?? "stopped",
@@ -1781,6 +1798,9 @@ export class DesktopController {
     if (this.lifecycleState !== "running" || this.quitting) {
       return { ok: false, message: "The local store is locking or closing. No account setting was changed." };
     }
+    if (request.kind === "set-screenshot-protection") {
+      return this.setScreenshotProtection(request.enabled);
+    }
     const active = this.active;
     if (!active) return { ok: false, message: "Unlock the encrypted local store before changing account settings." };
 
@@ -2044,6 +2064,58 @@ export class DesktopController {
       }
     }
     return { ok: false, message: "This desktop workflow is not available in the current runtime." };
+  }
+
+  private async setScreenshotProtection(enabled: boolean): Promise<DesktopActionResult> {
+    if (!enabled && !this.screenshotControlAvailable) {
+      return {
+        ok: false,
+        message: "Screenshot protection cannot be disabled in this build."
+      };
+    }
+    const window = this.window;
+    if (!window || window.isDestroyed()) {
+      return { ok: false, message: "The dashboard window is unavailable." };
+    }
+    if (enabled === this.screenshotProtectionEnabled) {
+      return {
+        ok: true,
+        message: enabled
+          ? "Screenshot protection is already on."
+          : "Screenshots are already allowed for this session."
+      };
+    }
+    if (!enabled) {
+      const confirmation = await dialog.showMessageBox(window, {
+        type: "warning",
+        title: "Allow screenshots for this session?",
+        message: "Screen-capture protection will be turned off until you close the app.",
+        detail:
+          "Anything visible in this window—including personal financial data—may be captured by Windows, other apps, screen sharing, or recording tools. This Settings change is not saved. Installed builds start protected on the next launch; source runs still follow their explicit development configuration.",
+        buttons: ["Keep protection on", "Allow screenshots this session"],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true
+      });
+      if (confirmation.response !== 1) {
+        return { ok: false, message: "Screenshot protection remains on." };
+      }
+    }
+    try {
+      window.setContentProtection(enabled);
+      this.screenshotProtectionEnabled = enabled;
+    } catch {
+      return {
+        ok: false,
+        message: "The screenshot protection setting could not be changed."
+      };
+    }
+    return {
+      ok: true,
+      message: enabled
+        ? "Screenshot protection is on."
+        : "Screenshots are allowed for this session. This Settings change was not saved."
+    };
   }
 
   private async handleAccountWriteFailure(
@@ -2918,6 +2990,10 @@ function parseDesktopRequest(value: unknown): DesktopRequest | undefined {
   if (candidate.kind === "set-tunnel-running") {
     if (typeof candidate.running !== "boolean") return undefined;
     return { kind: "set-tunnel-running", running: candidate.running };
+  }
+  if (candidate.kind === "set-screenshot-protection") {
+    if (typeof candidate.enabled !== "boolean") return undefined;
+    return { kind: "set-screenshot-protection", enabled: candidate.enabled };
   }
   return undefined;
 }

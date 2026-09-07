@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 const html = readFileSync(resolve(process.cwd(), "src/renderer/index.html"), "utf8");
 const renderer = readFileSync(resolve(process.cwd(), "src/renderer/renderer.ts"), "utf8");
+const controller = readFileSync(resolve(process.cwd(), "src/main/controller.ts"), "utf8");
 
 describe("nontechnical onboarding contract", () => {
   it("offers a prominent no-real-data test and plainly distinguishes current availability", () => {
@@ -33,5 +34,18 @@ describe("nontechnical onboarding contract", () => {
       workflow.indexOf('showSection("imports")')
     );
     expect(renderer).toContain('focusPanel("import-preview")');
+  });
+
+  it("keeps screenshot capture a warned, session-only development control", () => {
+    expect(html).toContain('id="screenshot-protection-toggle"');
+    expect(html).toContain("Allow screenshots this session");
+    expect(html).toContain('id="screenshot-warning"');
+    expect(html).toContain('role="alert"');
+    expect(html).toContain("Screenshot capture is allowed for this session");
+    expect(renderer).toContain('{ kind: "set-screenshot-protection", enabled: !enabled }');
+    expect(renderer).toContain('{ kind: "set-screenshot-protection", enabled: true }');
+    expect(renderer).toContain('screenshotToggle.hidden = !snapshot.privacy.screenshotControlAvailable');
+    expect(controller).toContain("window.setContentProtection(enabled)");
+    expect(controller).toContain("This Settings change is not saved");
   });
 });

@@ -23,8 +23,20 @@ The app actively applies the desktop startup/privacy flags, contained storage pa
 | `AMEX_TIMEZONE` | No | Validated/reserved IANA time zone for future statement-boundary policy. Current display uses the Windows locale and stored transaction instants remain unambiguous. |
 | `AMEX_TELEMETRY_ENABLED` | No | Reserved feature flag. Production local-first policy requires `false`. |
 | `AMEX_CRASH_REPORTING_ENABLED` | No | Reserved feature flag. Production local-first policy requires `false`; diagnostic bundles are local and user-created. |
-| `AMEX_SCREENSHOT_PROTECTION` | No | Requests Windows content protection on financial windows. It is defense in depth, not a guarantee against screen capture. |
+| `AMEX_SCREENSHOT_PROTECTION` | No | Defaults to `true` and requests Windows content protection on financial windows. `false` is permitted only in development/test for a synthetic-data screenshot run; production rejects it. The value is read at process start, so fully exit and restart the tray app after changing it. Content protection is defense in depth, not a guarantee against cameras or privileged capture software. |
 | `AMEX_DEMO_MODE` | No | Enables explicit synthetic seed data for development. Production rejects `true`. |
+
+### Development-only screenshots
+
+Keep `AMEX_SCREENSHOT_PROTECTION=true` for production and for every run that can display real statements, transactions, account identifiers, provider pages, credentials, tokens, local paths containing personal information, or other financial data.
+
+For a documentation screenshot made entirely with synthetic local data, a developer may temporarily use `AMEX_SCREENSHOT_PROTECTION=false` with `AMEX_APP_ENV=development` or `test`. Fully exit the running tray app first, verify that the next run cannot open an existing real-data profile, then restart with the development screenshot configuration. Never capture `.env`, Windows Credential Manager, provider consent, logs, local file paths, or any screen containing real account data or secrets. Exit that run when finished and restore protection before any real-data use.
+
+The dedicated `npm run dev:screenshots` command is the safer source-development entry point: it enables demo data, uses the isolated `local-data/screenshot-development` data directory, and disables content protection for that run. It cannot display the normal existing real-data store. Still inspect every frame before saving or sharing it. A production configuration cannot start with the environment flag disabled and fails closed with `Screenshot protection cannot be disabled in production.`
+
+Every packaged launch forces screenshot protection on, even if its process environment tries to set the flag to `false`. The separately built **unsigned-alpha** installer has a second, session-only control for documentation testing after that protected start. Choose **Settings → Allow screenshots this session**, read the native warning, and explicitly confirm. While protection is off, the app shows a **Screenshots allowed** badge and the warning **Screenshot capture is allowed for this session** on every page. Choose **Turn protection back on** as soon as the capture is complete. This Settings choice is held only in memory; exiting and relaunching the installed app starts protected again.
+
+The session control is available only to unpackaged development/test runs and artifacts carrying the explicit generated `unsigned-alpha` build-channel marker. A missing, malformed, or ordinary production marker hides it. Future signed/production packages must not expose the control. The unsigned-alpha exception does not make real-data capture acceptable: use synthetic data only and never capture real account information or credentials.
 
 ## Storage and retention variables
 

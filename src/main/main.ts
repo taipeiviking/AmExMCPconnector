@@ -1,6 +1,7 @@
 import { app, dialog, powerMonitor } from "electron";
 import { environmentForRuntime, loadConfiguration } from "../config/environment";
 import { DesktopController } from "./controller";
+import { canControlScreenshotProtection, readBuildChannel } from "./build-channel";
 import { packagedSmokeExitDelay, startupFailureDetail } from "./startup-policy";
 
 app.setName("Amex Local Finance Connector");
@@ -17,7 +18,13 @@ async function start(): Promise<void> {
   const configuration = app.isPackaged
     ? loadConfiguration({ environment: environmentForRuntime(process.env, true) })
     : loadConfiguration({ loadEnvFile: true });
-  const controller = new DesktopController(configuration);
+  const controller = new DesktopController(configuration, {
+    screenshotControlAvailable: canControlScreenshotProtection({
+      environment: configuration.environment,
+      packaged: app.isPackaged,
+      buildChannel: readBuildChannel()
+    })
+  });
 
   app.on("second-instance", () => void controller.showDashboard());
   app.on("activate", () => void controller.showDashboard());

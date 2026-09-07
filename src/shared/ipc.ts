@@ -46,6 +46,7 @@ export type DesktopRequest =
   | { kind: "approve-jp-import"; previewId: string }
   | { kind: "cancel-jp-import"; previewId: string }
   | { kind: "authorize-us-account"; accountId: string }
+  | { kind: "set-screenshot-protection"; enabled: boolean }
   | {
       kind: "prepare-export";
       accountId: string;
@@ -163,6 +164,11 @@ export interface DesktopSnapshot {
     state: "locked" | "unlocked" | "unavailable";
     protection: string;
     dataDirectory: string;
+  };
+  privacy: {
+    screenshotProtectionEnabled: boolean;
+    screenshotControlAvailable: boolean;
+    settingScope: "session";
   };
   mcp: {
     state: string;

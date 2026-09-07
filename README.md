@@ -69,6 +69,10 @@ npm run dev:demo
 
 `dev:demo` is an explicit synthetic-data mode. Use `npm run dev` for an empty encrypted local store. Runtime files default to `%LOCALAPPDATA%\AmexLocalFinanceConnector`, outside the repository.
 
+For documentation screenshots of synthetic UI only, use `npm run dev:screenshots`. The command starts a development run with demo data in an isolated screenshot-data directory and disables Windows content protection for that run. Never use screenshot mode with real statements, accounts, provider consent, credentials, tokens, or identifying local paths. Fully exit the tray app before switching modes, and restart with protection enabled before any real-data use.
+
+The repository's unsigned-alpha installer also exposes **Settings → Allow screenshots this session**. It requires a warning confirmation, shows **Screenshots allowed** plus a persistent warning while protection is off, and is never saved; exiting and relaunching the installed app restores protection. Use **Turn protection back on** before displaying anything sensitive. Future signed/production builds do not expose this development control, and production configuration cannot start with protection disabled. See [configuration](docs/CONFIGURATION.md#development-only-screenshots).
+
 For development configuration only:
 
 ```powershell
@@ -83,6 +87,7 @@ Never place a real secret, token, Amex credential, account identifier, statement
 | --- | --- |
 | `npm run dev` | Build and start the empty local app. |
 | `npm run dev:demo` | Build and start with synthetic in-memory accounts. |
+| `npm run dev:screenshots` | Build and start an isolated synthetic development run with screenshot protection explicitly disabled. |
 | `npm run typecheck` | Run strict TypeScript checks. |
 | `npm test` | Run the automated test suite. |
 | `npm run build` | Compile and copy renderer/WASM assets. |

@@ -47,11 +47,17 @@
             <h1 id="page-title">Overview</h1>
           </div>
           <div class="topbar-actions">
+            <span id="screenshot-pill" class="pill bad" hidden>Screenshots allowed</span>
             <span id="environment-pill" class="pill neutral">Loading</span>
             <span id="mcp-pill" class="pill neutral">ChatGPT · checking</span>
             <button class="button secondary" data-action="refresh">Refresh</button>
           </div>
         </header>
+
+        <div id="screenshot-warning" class="capture-warning" role="alert" hidden>
+          <div><strong>Screenshot capture is allowed for this session.</strong><span>Anything visible here may appear in screenshots, recordings, or screen sharing.</span></div>
+          <button id="restore-screenshot-protection" class="button secondary" type="button">Turn protection back on</button>
+        </div>
 
         <div id="notice" class="toast" role="status" aria-live="polite" hidden></div>
 
@@ -316,6 +322,7 @@
             <button id="restart-onboarding" class="settings-card"><strong>Getting started</strong><span>Open the account-path wizard and safe local test</span></button>
             <button class="settings-card" data-action="open-data-folder"><strong>Local data folder</strong><span>Encrypted database, key envelope, and import staging</span></button>
             <button class="settings-card" data-action="open-export-folder"><strong>Export folder</strong><span>Human-approved packages only</span></button>
+            <button id="screenshot-protection-toggle" class="settings-card" type="button" hidden><strong id="screenshot-protection-title">Allow screenshots this session</strong><span id="screenshot-protection-detail">For development and testing only; this Settings choice is never saved.</span></button>
             <button class="settings-card danger" data-action="lock"><strong>Lock local data</strong><span>Hide the dashboard and close decrypted state where supported</span></button>
             <button class="settings-card danger" data-action="delete-all-local-data"><strong>Delete local financial data</strong><span>Inventoried app-owned paths only; preferences and external copies remain</span></button>
           </div>

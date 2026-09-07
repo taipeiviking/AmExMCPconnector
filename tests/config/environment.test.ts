@@ -13,7 +13,14 @@ describe("loadConfiguration", () => {
     );
     expect(packaged.AMEX_APP_ENV).toBe("production");
     expect(packaged.AMEX_MCP_MODE).toBe("disabled");
+    expect(packaged.AMEX_SCREENSHOT_PROTECTION).toBe("true");
     expect(() => loadConfiguration({ environment: packaged })).toThrow(/Demo data is forbidden in production/u);
+
+    const packagedScreenshotOverride = environmentForRuntime(
+      { AMEX_SCREENSHOT_PROTECTION: "false", LOCALAPPDATA: "C:\\runtime" },
+      true
+    );
+    expect(loadConfiguration({ environment: packagedScreenshotOverride }).screenshotProtection).toBe(true);
 
     const development = environmentForRuntime({ AMEX_APP_ENV: "test" }, false);
     expect(development.AMEX_APP_ENV).toBe("test");
@@ -24,8 +31,26 @@ describe("loadConfiguration", () => {
 
     expect(configuration.mcp.host).toBe("127.0.0.1");
     expect(configuration.mcp.mode).toBe("local");
+    expect(configuration.screenshotProtection).toBe(true);
     expect(configuration.telemetryEnabled).toBe(false);
     expect(configuration.storage.databasePath).toContain("AmexLocalFinanceConnector");
+  });
+
+  it("allows screenshot capture only through an explicit non-production opt-in", () => {
+    const development = loadConfiguration({
+      environment: { ...baseEnvironment, AMEX_APP_ENV: "development", AMEX_SCREENSHOT_PROTECTION: "false" }
+    });
+    const test = loadConfiguration({
+      environment: { ...baseEnvironment, AMEX_APP_ENV: "test", AMEX_SCREENSHOT_PROTECTION: "false" }
+    });
+
+    expect(development.screenshotProtection).toBe(false);
+    expect(test.screenshotProtection).toBe(false);
+    expect(() =>
+      loadConfiguration({
+        environment: { ...baseEnvironment, AMEX_APP_ENV: "production", AMEX_SCREENSHOT_PROTECTION: "false" }
+      })
+    ).toThrow(/Screenshot protection cannot be disabled in production/u);
   });
 
   it("parses false-like strings without treating them as truthy", () => {
