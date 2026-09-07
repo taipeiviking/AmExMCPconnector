@@ -6,8 +6,13 @@ import { packagedSmokeExitDelay, startupFailureDetail } from "./startup-policy";
 
 app.setName("Amex Local Finance Connector");
 
+const quitForUpdate = process.argv.includes("--quit-for-update");
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) {
+  app.quit();
+} else if (quitForUpdate) {
+  // A helper uses this no-op launch when no primary process exists. When a
+  // primary process does exist, it receives the second-instance signal below.
   app.quit();
 } else {
   void start().catch((error: unknown) => reportStartupFailure(error));
@@ -26,7 +31,13 @@ async function start(): Promise<void> {
     })
   });
 
-  app.on("second-instance", () => void controller.showDashboard());
+  app.on("second-instance", (_event, commandLine) => {
+    if (commandLine.includes("--quit-for-update")) {
+      void controller.quit();
+      return;
+    }
+    void controller.showDashboard();
+  });
   app.on("activate", () => void controller.showDashboard());
   app.on("window-all-closed", () => {
     // Windows tray process remains active until the explicit Quit command.

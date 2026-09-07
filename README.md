@@ -93,6 +93,7 @@ Never place a real secret, token, Amex credential, account identifier, statement
 | `npm run build` | Compile and copy renderer/WASM assets. |
 | `npm run verify` | Typecheck, run unit/contract tests, build, and smoke-test the Electron/IPC/MCP startup path. |
 | `npm run package:win` | Create an unsigned NSIS installer under `release/`. |
+| `npm run install:win:latest` | Silently install the newest local Windows installer, verify its version, and launch it. It asks the running app to exit cleanly first. |
 | `npm run smoke:packaged` | Launch the unpacked production executable with isolated temporary data, verify encrypted startup with MCP safely disabled by default, and exercise its graceful shutdown path. Run after packaging. |
 
 Unsigned installers are for local testing only. Production distribution needs protected code signing, release provenance, malware scanning, and a reviewed update process.

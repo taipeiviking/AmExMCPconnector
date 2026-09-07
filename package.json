@@ -1,6 +1,6 @@
 {
   "name": "amex-local-finance-connector",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "private": true,
   "description": "Local-first Windows desktop connector for read-only American Express financial data access over MCP.",
   "author": "AmEx MCP Connector contributors",
@@ -29,6 +29,7 @@
     "dev:demo": "npm run build && cross-env AMEX_DEMO_MODE=true electron .",
     "smoke:electron": "node scripts/electron-smoke.mjs",
     "smoke:packaged": "node scripts/packaged-smoke.mjs",
+    "install:win:latest": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-latest.ps1 -LaunchAfterInstall",
     "package:win": "cross-env AMEX_BUILD_CHANNEL=unsigned-alpha npm run build && electron-builder --win nsis",
     "verify": "npm run scan:secrets && npm run typecheck && npm test && npm run build && npm run smoke:electron"
   },
