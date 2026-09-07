@@ -33,13 +33,15 @@ describe("tunnel executable verification", () => {
     await writeFile(executable, bytes);
     const expectedSha256 = createHash("sha256").update(bytes).digest("hex");
 
+    const canonicalExecutable = await realpath(executable);
+
     await expect(
       verifyTunnelExecutable(executable, {
         expectedSha256,
         allowedDirectories: [directory],
         platform: process.platform,
       }),
-    ).resolves.toMatchObject({ canonicalPath: executable, sha256: expectedSha256, sizeBytes: bytes.length });
+    ).resolves.toMatchObject({ canonicalPath: canonicalExecutable, sha256: expectedSha256, sizeBytes: bytes.length });
     await expect(
       verifyTunnelExecutable(executable, {
         expectedSha256: "0".repeat(64),
