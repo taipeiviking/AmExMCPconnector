@@ -1,4 +1,8 @@
 import { createHash } from "node:crypto";
+import type {
+  PlaidHostedLinkSessionStore,
+  PlaidPendingHostedLinkSession,
+} from "./encrypted-plaid-hosted-link-session-store";
 import type { NormalizedV1ProviderAccount } from "./normalized-v1-provider-response";
 import { PlaidApiClient } from "./plaid-api-client";
 import {
@@ -22,12 +26,14 @@ import {
   type ProviderAuthorizationStatus,
   type ProviderConsentStart,
   type ProviderDisconnectResult,
+  type ProviderReadResult,
   type ProviderTokenSet,
   type ProviderTokenStore,
 } from "./provider-types";
 
 export const PLAID_PROVIDER_ID = "plaid";
 const NON_EXPIRING_ACCESS_TOKEN_DATE = "9999-12-31T23:59:59.999Z";
+const PLAID_SESSION_DETAILS_RECOVERY_MS = 6 * 60 * 60 * 1000;
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,511}$/u;
 
 export interface PlaidHostedLinkConfiguration {
@@ -50,10 +56,15 @@ export interface PlaidHostedConsentCompletion {
 export interface PlaidHostedLinkDependencies {
   readonly now?: () => Date;
   readonly wait?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
+  /** Required in Production so a completed external-browser flow survives an app exit. */
+  readonly pendingSessions?: PlaidHostedLinkSessionStore;
 }
 
 interface PendingHostedLink {
   readonly linkToken: Uint8Array;
+  readonly authorizationUrl: string;
+  readonly createdAt: string;
+  readonly expiresAt: string;
   readonly expiresAtMs: number;
   readonly grant:
     | { readonly kind: "new" }
@@ -74,6 +85,7 @@ export class PlaidHostedLinkProvider {
   private readonly configuration: ValidatedConfiguration;
   private readonly now: () => Date;
   private readonly wait: (milliseconds: number, signal: AbortSignal) => Promise<void>;
+  private readonly pendingSessions?: PlaidHostedLinkSessionStore;
   private readonly pending = new Map<string, PendingHostedLink>();
   private readonly completions = new Map<string, AbortController>();
   private acceptingRequests = true;
@@ -85,15 +97,16 @@ export class PlaidHostedLinkProvider {
     dependencies: PlaidHostedLinkDependencies = {},
   ) {
     this.configuration = validateConfiguration(configuration);
-    if (api.environment === "production" && this.configuration.redirectUri === undefined) {
-      throw new ProviderIntegrationError(
-        "INVALID_CONFIGURATION",
-        "Plaid production Hosted Link requires a Dashboard-allowlisted HTTPS OAuth redirect URI.",
-      );
-    }
     this.institutionPolicy = plaidInstitutionPolicyForEnvironment(api.environment);
     this.now = dependencies.now ?? (() => new Date());
     this.wait = dependencies.wait ?? abortableWait;
+    this.pendingSessions = dependencies.pendingSessions;
+    if (api.environment === "production" && this.pendingSessions === undefined) {
+      throw new ProviderIntegrationError(
+        "INVALID_CONFIGURATION",
+        "Plaid production is disabled until encrypted Hosted Link recovery storage is configured.",
+      );
+    }
   }
 
   public abortPending(): void {
@@ -119,8 +132,32 @@ export class PlaidHostedLinkProvider {
       throw new ProviderIntegrationError("CONSENT_MISMATCH", "Hosted Link completion is already in progress.");
     }
     const previous = this.pending.get(localAccountId);
-    previous?.linkToken.fill(0);
-    this.pending.delete(localAccountId);
+    if (previous !== undefined) {
+      this.assertPendingMatchesRequest(previous, existingProviderAccountId);
+      return this.toConsentStart(localAccountId, previous);
+    }
+
+    const recovered = await this.loadRecoveredSession(localAccountId);
+    const stored = await this.tokens.get(PLAID_PROVIDER_ID, localAccountId);
+    if (recovered !== undefined && stored === undefined) {
+      try {
+        this.assertPendingMatchesRequest(recovered, existingProviderAccountId);
+      } catch (error) {
+        recovered.linkToken.fill(0);
+        throw error;
+      }
+      this.pending.set(localAccountId, recovered);
+      return this.toConsentStart(localAccountId, recovered);
+    }
+    if (recovered !== undefined) {
+      recovered.linkToken.fill(0);
+      try {
+        await this.deleteRecoveredSession(localAccountId);
+      } catch (error) {
+        wipeTokenSet(stored!);
+        throw error;
+      }
+    }
 
     const commonRequest = {
       client_name: this.configuration.clientName,
@@ -141,7 +178,6 @@ export class PlaidHostedLinkProvider {
         ? {}
         : { redirect_uri: this.configuration.redirectUri }),
     };
-    const stored = await this.tokens.get(PLAID_PROVIDER_ID, localAccountId);
     let grant: PendingHostedLink["grant"];
     let response;
     if (stored === undefined) {
@@ -190,24 +226,33 @@ export class PlaidHostedLinkProvider {
     }
     const created = parsePlaidHostedLinkCreate(response.data);
     const token = Buffer.from(created.linkToken, "utf8");
-    this.pending.set(localAccountId, {
+    const pending: PendingHostedLink = {
       linkToken: token,
+      authorizationUrl: created.authorizationUrl,
+      createdAt: this.now().toISOString(),
+      expiresAt: created.expiresAt,
       expiresAtMs: Date.parse(created.expiresAt),
       grant,
-    });
-    return {
-      providerId: PLAID_PROVIDER_ID,
-      localAccountId,
-      authorizationUrl: created.authorizationUrl,
-      expiresAt: created.expiresAt,
     };
+    try {
+      if (grant.kind === "new") await this.persistPendingSession(localAccountId, pending);
+      this.pending.set(localAccountId, pending);
+      return this.toConsentStart(localAccountId, pending);
+    } catch (error) {
+      token.fill(0);
+      throw error;
+    }
   }
 
   /** Polls Hosted Link, exchanges one public token, and saves one validated Amex card grant. */
   public async completeHostedConsent(localAccountId: string): Promise<PlaidHostedConsentCompletion> {
     this.assertAvailable();
     validateId(localAccountId, "local account ID");
-    const pending = this.pending.get(localAccountId);
+    let pending = this.pending.get(localAccountId);
+    if (pending === undefined) {
+      pending = await this.loadRecoveredSession(localAccountId);
+      if (pending !== undefined) this.pending.set(localAccountId, pending);
+    }
     if (pending === undefined) {
       throw new ProviderIntegrationError("CONSENT_MISMATCH", "No matching Plaid Hosted Link session is pending.");
     }
@@ -216,28 +261,55 @@ export class PlaidHostedLinkProvider {
     }
     const completion = new AbortController();
     this.completions.set(localAccountId, completion);
+    const recoveryDeadline = pending.expiresAtMs + PLAID_SESSION_DETAILS_RECOVERY_MS;
     const deadline = Math.min(
-      pending.expiresAtMs,
+      Math.max(pending.expiresAtMs, Math.min(recoveryDeadline, this.now().getTime() + 1)),
       this.now().getTime() + this.configuration.completionTimeoutMs,
     );
+    let deleteRecovery = false;
+    let firstStatusCheck = true;
     try {
-      while (this.now().getTime() < deadline) {
-        const status = await this.withSecretText(pending.linkToken, async (linkToken) =>
-          await this.api.post("/link/token/get", { link_token: linkToken }));
+      while (firstStatusCheck || this.now().getTime() < deadline) {
+        firstStatusCheck = false;
+        let status: ProviderReadResult;
+        try {
+          status = await this.withSecretText(pending.linkToken, async (linkToken) =>
+            await this.api.post("/link/token/get", { link_token: linkToken }));
+        } catch (error) {
+          if (error instanceof ProviderIntegrationError && error.code === "PROVIDER_UNAVAILABLE") {
+            if (pending.grant.kind === "new" && pending.expiresAtMs <= this.now().getTime()) {
+              if (this.now().getTime() >= recoveryDeadline) {
+                deleteRecovery = true;
+                throw expiredUnconfirmedCleanupError(error);
+              }
+              throw new ProviderIntegrationError(
+                "PROVIDER_UNAVAILABLE",
+                "Plaid could not check the completed Hosted Link session after it expired. Encrypted recovery was retained; reopen U.S. personal setup to retry within the six-hour recovery window.",
+                error,
+              );
+            }
+            await this.wait(this.configuration.pollIntervalMs, completion.signal);
+            continue;
+          }
+          throw error;
+        }
         if (pending.grant.kind === "new") {
           const link = parsePlaidHostedLinkState(status.data);
           if (link.state === "cancelled") {
+            deleteRecovery = true;
             throw new ProviderIntegrationError(
               "CONSENT_CANCELLED",
               "Plaid Hosted Link was closed without connecting an account.",
             );
           }
           if (link.state === "succeeded") {
-            return await this.exchangeAndValidate(
+            const completed = await this.exchangeAndValidate(
               localAccountId,
               link.result.publicToken,
               link.result.accountId,
             );
+            deleteRecovery = true;
+            return completed;
           }
         } else {
           const link = parsePlaidHostedLinkUpdateState(status.data);
@@ -251,12 +323,31 @@ export class PlaidHostedLinkProvider {
             return await this.completeHostedUpdate(localAccountId, pending.grant);
           }
         }
+        if (pending.expiresAtMs <= this.now().getTime()) break;
         await this.wait(this.configuration.pollIntervalMs, completion.signal);
       }
-      throw new ProviderIntegrationError("CONSENT_EXPIRED", "Plaid Hosted Link did not complete before it expired.");
+      if (pending.expiresAtMs <= this.now().getTime()) {
+        deleteRecovery = true;
+        throw expiredRecoveryError();
+      }
+      throw new ProviderIntegrationError(
+        "PROVIDER_UNAVAILABLE",
+        "Plaid consent is still recoverable; reopen U.S. personal setup to resume this Hosted Link session.",
+      );
     } catch (error) {
       if (completion.signal.aborted && !(error instanceof ProviderIntegrationError)) {
-        throw new ProviderIntegrationError("CONSENT_CANCELLED", "Plaid Hosted Link completion was cancelled.", error);
+        throw new ProviderIntegrationError(
+          "PROVIDER_UNAVAILABLE",
+          "Plaid consent was paused and can be resumed when the app is reopened.",
+          error,
+        );
+      }
+      if (
+        pending.grant.kind === "new" &&
+        error instanceof ProviderIntegrationError &&
+        error.code !== "PROVIDER_UNAVAILABLE"
+      ) {
+        deleteRecovery = true;
       }
       throw error;
     } finally {
@@ -264,6 +355,9 @@ export class PlaidHostedLinkProvider {
       const current = this.pending.get(localAccountId);
       if (current === pending) this.pending.delete(localAccountId);
       pending.linkToken.fill(0);
+      if (deleteRecovery && pending.grant.kind === "new") {
+        await this.deleteRecoveredSession(localAccountId).catch(() => undefined);
+      }
     }
   }
 
@@ -275,10 +369,31 @@ export class PlaidHostedLinkProvider {
     pending?.linkToken.fill(0);
   }
 
+  /** Explicitly abandons recoverable new-account consent and its encrypted Link token. */
+  public async abandonHostedConsent(localAccountId: string): Promise<void> {
+    this.cancelConsent(localAccountId);
+    await this.deleteRecoveredSession(localAccountId);
+  }
+
   public async checkAuthorization(localAccountId: string): Promise<ProviderAuthorizationStatus> {
     validateId(localAccountId, "local account ID");
     const stored = await this.tokens.get(PLAID_PROVIDER_ID, localAccountId);
-    if (stored === undefined) return this.status(localAccountId, "not_authorized", "plaid_item_not_linked");
+    if (stored === undefined) {
+      const inMemory = this.pending.get(localAccountId);
+      if (inMemory !== undefined) {
+        return this.pendingStatus(localAccountId, inMemory);
+      }
+      const recovered = await this.loadRecoveredSession(localAccountId);
+      if (recovered === undefined) {
+        return this.status(localAccountId, "not_authorized", "plaid_item_not_linked");
+      }
+      try {
+        return this.pendingStatus(localAccountId, recovered);
+      } finally {
+        recovered.linkToken.fill(0);
+      }
+    }
+    await this.deleteRecoveredSession(localAccountId).catch(() => undefined);
     try {
       validateStoredTokens(stored, this.now());
       const itemResult = await this.withSecretText(stored.accessToken, async (accessToken) =>
@@ -365,6 +480,7 @@ export class PlaidHostedLinkProvider {
     validateId(localAccountId, "local account ID");
     const prepared = await this.prepareDisconnect(localAccountId);
     try {
+      await this.abandonHostedConsent(localAccountId);
       await this.tokens.delete(PLAID_PROVIDER_ID, localAccountId);
       return {
         localCredentialsDeleted: true,
@@ -481,10 +597,20 @@ export class PlaidHostedLinkProvider {
     const itemResult = await this.withSecretText(accessToken, async (value) =>
       await this.api.post("/item/get", { access_token: value }));
     const item = parsePlaidItem(itemResult.data);
-    if (item.itemId !== expectedItemId || item.errorCode !== undefined) {
+    if (item.itemId !== expectedItemId) {
       throw new ProviderIntegrationError(
         "INVALID_PROVIDER_RESPONSE",
         "Plaid did not return the exact healthy Item created by Hosted Link.",
+      );
+    }
+    if (item.errorCode !== undefined) {
+      throw new ProviderIntegrationError(
+        isAuthorizationError(item.errorCode, item.errorType)
+          ? "AUTHORIZATION_REQUIRED"
+          : "PROVIDER_UNAVAILABLE",
+        isAuthorizationError(item.errorCode, item.errorType)
+          ? "Plaid still requires account permission or reauthorization."
+          : "The Plaid Item is temporarily unavailable.",
       );
     }
     await this.validateInstitution(item.institutionId);
@@ -541,6 +667,97 @@ export class PlaidHostedLinkProvider {
     };
   }
 
+  private pendingStatus(
+    localAccountId: string,
+    pending: PendingHostedLink,
+  ): ProviderAuthorizationStatus {
+    return {
+      providerId: PLAID_PROVIDER_ID,
+      localAccountId,
+      state: "pending",
+      checkedAt: this.now().toISOString(),
+      expiresAt: pending.expiresAt,
+      reason: pending.grant.kind === "new"
+        ? pending.expiresAtMs <= this.now().getTime()
+          ? "plaid_hosted_link_expired_recovery_check_required"
+          : "plaid_hosted_link_recoverable"
+        : "plaid_hosted_link_update_pending",
+    };
+  }
+
+  private toConsentStart(
+    localAccountId: string,
+    pending: PendingHostedLink,
+  ): ProviderConsentStart {
+    return {
+      providerId: PLAID_PROVIDER_ID,
+      localAccountId,
+      authorizationUrl: pending.authorizationUrl,
+      expiresAt: pending.expiresAt,
+    };
+  }
+
+  private assertPendingMatchesRequest(
+    pending: PendingHostedLink,
+    existingProviderAccountId?: string,
+  ): void {
+    if (
+      (pending.grant.kind === "new" && existingProviderAccountId !== undefined) ||
+      (pending.grant.kind === "update" &&
+        existingProviderAccountId !== pending.grant.providerAccountId)
+    ) {
+      throw new ProviderIntegrationError(
+        "CONSENT_MISMATCH",
+        "The recoverable Plaid consent session does not match the selected account.",
+      );
+    }
+  }
+
+  private async loadRecoveredSession(localAccountId: string): Promise<PendingHostedLink | undefined> {
+    const recovered = await this.pendingSessions?.get(localAccountId);
+    if (recovered === undefined) return undefined;
+    try {
+      if (recovered.environment !== this.api.environment || recovered.grantKind !== "new") {
+        throw new ProviderIntegrationError(
+          "CONSENT_MISMATCH",
+          "The recoverable Plaid consent belongs to a different provider environment.",
+        );
+      }
+      return {
+        linkToken: recovered.linkToken,
+        authorizationUrl: recovered.authorizationUrl,
+        createdAt: recovered.createdAt,
+        expiresAt: recovered.expiresAt,
+        expiresAtMs: Date.parse(recovered.expiresAt),
+        grant: { kind: "new" },
+      };
+    } catch (error) {
+      recovered.linkToken.fill(0);
+      throw error;
+    }
+  }
+
+  private async persistPendingSession(
+    localAccountId: string,
+    pending: PendingHostedLink,
+  ): Promise<void> {
+    if (this.pendingSessions === undefined) return;
+    const session: PlaidPendingHostedLinkSession = {
+      grantKind: "new",
+      environment: this.api.environment,
+      localAccountId,
+      linkToken: pending.linkToken,
+      authorizationUrl: pending.authorizationUrl,
+      createdAt: pending.createdAt,
+      expiresAt: pending.expiresAt,
+    };
+    await this.pendingSessions.put(session);
+  }
+
+  private async deleteRecoveredSession(localAccountId: string): Promise<void> {
+    await this.pendingSessions?.delete(localAccountId);
+  }
+
   private assertAvailable(): void {
     if (!this.acceptingRequests) {
       throw new ProviderIntegrationError(
@@ -595,8 +812,8 @@ function validateConfiguration(configuration: PlaidHostedLinkConfiguration): Val
   }
   const transactionHistoryDays = configuration.transactionHistoryDays ?? 730;
   const hostedLinkLifetimeSeconds = configuration.hostedLinkLifetimeSeconds ?? 1800;
-  const pollIntervalMs = configuration.pollIntervalMs ?? 1500;
-  const completionTimeoutMs = configuration.completionTimeoutMs ?? 10 * 60 * 1000;
+  const pollIntervalMs = configuration.pollIntervalMs ?? 3000;
+  const completionTimeoutMs = configuration.completionTimeoutMs ?? 30 * 60 * 1000;
   if (!Number.isSafeInteger(transactionHistoryDays) || transactionHistoryDays < 30 || transactionHistoryDays > 730) {
     throw new ProviderIntegrationError("INVALID_CONFIGURATION", "Plaid transaction history must be 30-730 days.");
   }
@@ -654,7 +871,26 @@ function isAuthorizationError(errorCode: string, errorType?: string): boolean {
   return errorCode === "ITEM_LOGIN_REQUIRED" ||
     errorCode === "INVALID_ACCESS_TOKEN" ||
     errorCode === "ITEM_NOT_FOUND" ||
+    errorCode === "ACCESS_NOT_GRANTED" ||
+    errorCode === "ADDITIONAL_CONSENT_REQUIRED" ||
+    errorCode === "PENDING_DISCONNECT" ||
+    errorCode === "PENDING_EXPIRATION" ||
     errorType === "OAUTH_ERROR";
+}
+
+function expiredRecoveryError(): ProviderIntegrationError {
+  return new ProviderIntegrationError(
+    "CONSENT_EXPIRED",
+    "Plaid could not confirm a reusable grant after Hosted Link expired. An incomplete Plaid Item may exist; review it in the Plaid Dashboard before retrying.",
+  );
+}
+
+function expiredUnconfirmedCleanupError(cause: unknown): ProviderIntegrationError {
+  return new ProviderIntegrationError(
+    "CONSENT_EXPIRED",
+    "Plaid could not confirm whether Hosted Link completed before the six-hour recovery window ended. Local recovery was removed; remote cleanup is unconfirmed, so review the Plaid Dashboard before retrying.",
+    cause,
+  );
 }
 
 function validateId(value: string, label: string): void {

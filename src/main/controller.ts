@@ -46,6 +46,7 @@ import {
   type SecretReferenceStore
 } from "../security/secret-reference";
 import {
+  EncryptedPlaidHostedLinkSessionStore,
   EncryptedProviderBindingStore,
   EncryptedVaultProviderTokenStore,
   GenericProviderOAuthClient,
@@ -753,7 +754,13 @@ export class DesktopController {
           transactionHistoryDays: raw.AMEX_US_SYNC_LOOKBACK_DAYS
         },
         api,
-        tokenStore
+        tokenStore,
+        {
+          pendingSessions: new EncryptedPlaidHostedLinkSessionStore(
+            encrypted.secrets,
+            async () => await encrypted.database.save()
+          )
+        }
       );
       const financial = new PlaidReadOnlyFinancialProvider(
         {
@@ -2384,6 +2391,13 @@ export class DesktopController {
               prepared = await provider.oauth.prepareDisconnect(account.id).catch(() => undefined);
             }
             try {
+              if (provider?.kind === "plaid-hosted-link") {
+                // Disconnect is an explicit owner decision, so abandon any
+                // unexchanged new-account Hosted Link session as well. This
+                // awaited deletion is intentionally different from lifecycle
+                // shutdown, which preserves encrypted recovery state.
+                await provider.oauth.abandonHostedConsent(account.id);
+              }
               // Stop local reads and atomically delete both protected local
               // references before any remote request is attempted.
               await active.disconnectUsAccount!(account.id);

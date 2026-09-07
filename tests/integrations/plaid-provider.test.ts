@@ -1,4 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import type {
+  PlaidHostedLinkSessionStore,
+  PlaidPendingHostedLinkSession,
+} from "../../src/integrations/encrypted-plaid-hosted-link-session-store";
 import { PlaidApiClient, type PlaidEnvironment } from "../../src/integrations/plaid-api-client";
 import { PlaidHostedLinkProvider } from "../../src/integrations/plaid-hosted-link-provider";
 import {
@@ -94,11 +98,12 @@ describe("Plaid Hosted Link provider", () => {
       "/accounts/get": accountsResponse(),
     });
     const store = new MemoryTokenStore();
+    const sessions = new MemoryHostedLinkSessionStore();
     const provider = new PlaidHostedLinkProvider(
       { clientName: "Amex Local Connector" },
       new PlaidApiClient(apiConfiguration("sandbox"), secretResolver(), fetchImpl),
       store,
-      { now: () => NOW },
+      { now: () => NOW, pendingSessions: sessions },
     );
 
     const started = await provider.beginHostedConsent(LOCAL_ACCOUNT_ID);
@@ -146,6 +151,7 @@ describe("Plaid Hosted Link provider", () => {
       "/item/remove": { request_id: "remove-request" },
     });
     const store = new MemoryTokenStore();
+    const sessions = new MemoryHostedLinkSessionStore();
     const provider = new PlaidHostedLinkProvider(
       {
         clientName: "Amex Local Connector",
@@ -153,7 +159,7 @@ describe("Plaid Hosted Link provider", () => {
       },
       new PlaidApiClient(apiConfiguration("production"), secretResolver(), fetchImpl),
       store,
-      { now: () => NOW },
+      { now: () => NOW, pendingSessions: sessions },
     );
 
     await provider.beginHostedConsent(LOCAL_ACCOUNT_ID);
@@ -223,13 +229,231 @@ describe("Plaid Hosted Link provider", () => {
     )).toThrow(/client name/iu);
   });
 
-  it("requires an allowlisted HTTPS OAuth redirect in production", () => {
+  it("allows external-browser production without a redirect and rejects unsafe optional redirects", () => {
+    const api = new PlaidApiClient(apiConfiguration("production"), secretResolver(), vi.fn() as typeof fetch);
+    const sessions = new MemoryHostedLinkSessionStore();
+    expect(() => new PlaidHostedLinkProvider(
+      { clientName: "Amex Local Connector" },
+      api,
+      new MemoryTokenStore(),
+      { pendingSessions: sessions },
+    )).not.toThrow();
+    expect(() => new PlaidHostedLinkProvider(
+      { clientName: "Amex Local Connector", redirectUri: "http://127.0.0.1/plaid-return" },
+      api,
+      new MemoryTokenStore(),
+      { pendingSessions: sessions },
+    )).toThrow(/redirect/iu);
+  });
+
+  it("fails closed in production when encrypted pending-session recovery is absent", () => {
     const api = new PlaidApiClient(apiConfiguration("production"), secretResolver(), vi.fn() as typeof fetch);
     expect(() => new PlaidHostedLinkProvider(
       { clientName: "Amex Local Connector" },
       api,
       new MemoryTokenStore(),
-    )).toThrow(/redirect URI/iu);
+    )).toThrow(/encrypted Hosted Link recovery/iu);
+  });
+
+  it("resumes an encrypted new-account Hosted Link after runtime shutdown", async () => {
+    const sessions = new MemoryHostedLinkSessionStore();
+    const tokens = new MemoryTokenStore();
+    const firstCalls: Array<{ path: string; body: Record<string, unknown> }> = [];
+    const first = new PlaidHostedLinkProvider(
+      { clientName: "Amex Local Connector" },
+      new PlaidApiClient(
+        apiConfiguration("sandbox"),
+        secretResolver(),
+        plaidFetchRouter("sandbox", firstCalls, {
+          "/link/token/create": hostedLinkCreateResponse("sandbox"),
+        }),
+      ),
+      tokens,
+      { now: () => NOW, pendingSessions: sessions },
+    );
+    const original = await first.beginHostedConsent(LOCAL_ACCOUNT_ID);
+    first.abortPending();
+
+    const resumedCalls: Array<{ path: string; body: Record<string, unknown> }> = [];
+    const resumed = new PlaidHostedLinkProvider(
+      { clientName: "Amex Local Connector" },
+      new PlaidApiClient(
+        apiConfiguration("sandbox"),
+        secretResolver(),
+        plaidFetchRouter("sandbox", resumedCalls, {
+          "/link/token/get": hostedLinkSuccessResponse(),
+          "/item/public_token/exchange": {
+            access_token: "recovered-access-token",
+            item_id: ITEM_ID,
+          },
+          "/item/get": itemResponse(),
+          "/institutions/get_by_id": institutionResponse(
+            SANDBOX_INSTITUTION_ID,
+            "First Platypus Bank",
+          ),
+          "/accounts/get": accountsResponse(),
+        }),
+      ),
+      tokens,
+      { now: () => NOW, pendingSessions: sessions },
+    );
+
+    await expect(resumed.checkAuthorization(LOCAL_ACCOUNT_ID)).resolves.toMatchObject({
+      state: "pending",
+      reason: "plaid_hosted_link_recoverable",
+    });
+    const reopened = await resumed.beginHostedConsent(LOCAL_ACCOUNT_ID);
+    expect(reopened).toEqual(original);
+    const completed = await resumed.completeHostedConsent(LOCAL_ACCOUNT_ID);
+
+    expect(completed.account.id).toBe(PROVIDER_ACCOUNT_ID);
+    expect(firstCalls.filter((call) => call.path === "/link/token/create")).toHaveLength(1);
+    expect(resumedCalls.map((call) => call.path)).not.toContain("/link/token/create");
+    expect(await sessions.get(LOCAL_ACCOUNT_ID)).toBeUndefined();
+  });
+
+  it("preserves encrypted recovery when shutdown aborts an in-flight status check", async () => {
+    const sessions = new MemoryHostedLinkSessionStore();
+    let markStatusStarted!: () => void;
+    const statusStarted = new Promise<void>((resolve) => {
+      markStatusStarted = resolve;
+    });
+    const fetchImpl = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const path = new URL(input instanceof Request ? input.url : String(input)).pathname;
+      if (path === "/link/token/create") return Response.json(hostedLinkCreateResponse("sandbox"));
+      if (path === "/link/token/get") {
+        markStatusStarted();
+        await new Promise<never>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+        });
+      }
+      throw new Error(`Unexpected Plaid request: ${path}`);
+    });
+    const provider = new PlaidHostedLinkProvider(
+      { clientName: "Amex Local Connector" },
+      new PlaidApiClient(apiConfiguration("sandbox"), secretResolver(), fetchImpl as typeof fetch),
+      new MemoryTokenStore(),
+      { now: () => NOW, pendingSessions: sessions },
+    );
+    await provider.beginHostedConsent(LOCAL_ACCOUNT_ID);
+
+    const completion = provider.completeHostedConsent(LOCAL_ACCOUNT_ID);
+    await statusStarted;
+    provider.abortPending();
+
+    await expect(completion).rejects.toMatchObject({ code: "PROVIDER_UNAVAILABLE" });
+    const recovered = await sessions.get(LOCAL_ACCOUNT_ID);
+    expect(recovered).toMatchObject({ localAccountId: LOCAL_ACCOUNT_ID, grantKind: "new" });
+    recovered?.linkToken.fill(0);
+  });
+
+  it("abandons encrypted new-account recovery on explicit disconnect", async () => {
+    const sessions = new MemoryHostedLinkSessionStore();
+    const provider = new PlaidHostedLinkProvider(
+      { clientName: "Amex Local Connector" },
+      new PlaidApiClient(
+        apiConfiguration("sandbox"),
+        secretResolver(),
+        plaidFetchRouter("sandbox", [], {
+          "/link/token/create": hostedLinkCreateResponse("sandbox"),
+        }),
+      ),
+      new MemoryTokenStore(),
+      { now: () => NOW, pendingSessions: sessions },
+    );
+    await provider.beginHostedConsent(LOCAL_ACCOUNT_ID);
+    expect(await sessions.get(LOCAL_ACCOUNT_ID)).toBeDefined();
+
+    await expect(provider.disconnect(LOCAL_ACCOUNT_ID)).resolves.toEqual({
+      localCredentialsDeleted: true,
+      remoteRevocation: "not_configured",
+    });
+    expect(await sessions.get(LOCAL_ACCOUNT_ID)).toBeUndefined();
+  });
+
+  it("checks an expired recovered session once before reporting unconfirmed cleanup", async () => {
+    const sessions = new MemoryHostedLinkSessionStore();
+    await sessions.put({
+      grantKind: "new",
+      environment: "sandbox",
+      localAccountId: LOCAL_ACCOUNT_ID,
+      linkToken: Buffer.from("expired-link-token", "utf8"),
+      authorizationUrl: "https://secure.plaid.com/hl/expired-session",
+      createdAt: "2026-09-06T22:00:00.000Z",
+      expiresAt: "2026-09-06T23:00:00.000Z",
+    });
+    const calls: Array<{ path: string; body: Record<string, unknown> }> = [];
+    const provider = new PlaidHostedLinkProvider(
+      { clientName: "Amex Local Connector" },
+      new PlaidApiClient(
+        apiConfiguration("sandbox"),
+        secretResolver(),
+        plaidFetchRouter("sandbox", calls, {
+          "/link/token/get": { link_sessions: [], request_id: "expired-check" },
+        }),
+      ),
+      new MemoryTokenStore(),
+      { now: () => NOW, pendingSessions: sessions },
+    );
+
+    const reopened = await provider.beginHostedConsent(LOCAL_ACCOUNT_ID);
+    expect(reopened.authorizationUrl).toContain("expired-session");
+    await expect(provider.completeHostedConsent(LOCAL_ACCOUNT_ID)).rejects.toMatchObject({
+      code: "CONSENT_EXPIRED",
+      message: expect.stringMatching(/incomplete Plaid Item/iu),
+    });
+    expect(calls.filter((call) => call.path === "/link/token/get")).toHaveLength(1);
+    expect(await sessions.get(LOCAL_ACCOUNT_ID)).toBeUndefined();
+  });
+
+  it("retains an expired session when Plaid is unavailable inside the recovery window", async () => {
+    const sessions = new MemoryHostedLinkSessionStore();
+    await sessions.put(recoverySession({
+      createdAt: "2026-09-06T22:00:00.000Z",
+      expiresAt: "2026-09-06T23:00:00.000Z",
+    }));
+    const fetchImpl = vi.fn(async () => Response.json(
+      { error_code: "API_ERROR", error_type: "API_ERROR", request_id: "unavailable" },
+      { status: 503 },
+    ));
+    const provider = new PlaidHostedLinkProvider(
+      { clientName: "Amex Local Connector" },
+      new PlaidApiClient(apiConfiguration("sandbox"), secretResolver(), fetchImpl as typeof fetch),
+      new MemoryTokenStore(),
+      { now: () => NOW, pendingSessions: sessions },
+    );
+
+    await expect(provider.completeHostedConsent(LOCAL_ACCOUNT_ID)).rejects.toMatchObject({
+      code: "PROVIDER_UNAVAILABLE",
+      message: expect.stringMatching(/six-hour recovery window/iu),
+    });
+    const recovered = await sessions.get(LOCAL_ACCOUNT_ID);
+    expect(recovered).toBeDefined();
+    recovered?.linkToken.fill(0);
+  });
+
+  it("removes stale local recovery after an unconfirmed six-hour-window check", async () => {
+    const sessions = new MemoryHostedLinkSessionStore();
+    await sessions.put(recoverySession({
+      createdAt: "2026-09-06T15:00:00.000Z",
+      expiresAt: "2026-09-06T16:00:00.000Z",
+    }));
+    const fetchImpl = vi.fn(async () => Response.json(
+      { error_code: "API_ERROR", error_type: "API_ERROR", request_id: "still-unavailable" },
+      { status: 503 },
+    ));
+    const provider = new PlaidHostedLinkProvider(
+      { clientName: "Amex Local Connector" },
+      new PlaidApiClient(apiConfiguration("sandbox"), secretResolver(), fetchImpl as typeof fetch),
+      new MemoryTokenStore(),
+      { now: () => NOW, pendingSessions: sessions },
+    );
+
+    await expect(provider.completeHostedConsent(LOCAL_ACCOUNT_ID)).rejects.toMatchObject({
+      code: "CONSENT_EXPIRED",
+      message: expect.stringMatching(/remote cleanup is unconfirmed/iu),
+    });
+    expect(await sessions.get(LOCAL_ACCOUNT_ID)).toBeUndefined();
   });
 });
 
@@ -463,6 +687,45 @@ class MemoryTokenStore implements ProviderTokenStore {
       value.refreshToken?.fill(0);
     }
   }
+}
+
+class MemoryHostedLinkSessionStore implements PlaidHostedLinkSessionStore {
+  private readonly values = new Map<string, PlaidPendingHostedLinkSession>();
+
+  public async get(localAccountId: string): Promise<PlaidPendingHostedLinkSession | undefined> {
+    const value = this.values.get(localAccountId);
+    return value === undefined ? undefined : cloneHostedLinkSession(value);
+  }
+
+  public async put(session: PlaidPendingHostedLinkSession): Promise<void> {
+    this.values.set(session.localAccountId, cloneHostedLinkSession(session));
+  }
+
+  public async delete(localAccountId: string): Promise<boolean> {
+    return this.values.delete(localAccountId);
+  }
+}
+
+function cloneHostedLinkSession(
+  value: PlaidPendingHostedLinkSession,
+): PlaidPendingHostedLinkSession {
+  return {
+    ...value,
+    linkToken: Uint8Array.from(value.linkToken),
+  };
+}
+
+function recoverySession(
+  times: Pick<PlaidPendingHostedLinkSession, "createdAt" | "expiresAt">,
+): PlaidPendingHostedLinkSession {
+  return {
+    grantKind: "new",
+    environment: "sandbox",
+    localAccountId: LOCAL_ACCOUNT_ID,
+    linkToken: Buffer.from("expired-link-token", "utf8"),
+    authorizationUrl: "https://secure.plaid.com/hl/expired-session",
+    ...times,
+  };
 }
 
 function cloneTokenSet(value: ProviderTokenSet): ProviderTokenSet {

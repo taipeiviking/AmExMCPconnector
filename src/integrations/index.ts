@@ -1,5 +1,10 @@
 export { EncryptedVaultProviderTokenStore } from "./encrypted-vault-provider-token-store";
 export {
+  EncryptedPlaidHostedLinkSessionStore,
+  type PlaidHostedLinkSessionStore,
+  type PlaidPendingHostedLinkSession,
+} from "./encrypted-plaid-hosted-link-session-store";
+export {
   EncryptedProviderBindingStore,
   type EncryptedProviderBinding,
 } from "./encrypted-provider-binding-store";
