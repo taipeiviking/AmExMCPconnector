@@ -5,7 +5,9 @@ export type SecretReferenceErrorCode =
   | "PLATFORM_UNAVAILABLE"
   | "SECRET_NOT_FOUND"
   | "SECRET_TOO_LARGE"
-  | "RESOLVER_FAILED";
+  | "RESOLVER_FAILED"
+  | "SECRET_WRITE_FAILED"
+  | "SECRET_DELETE_FAILED";
 
 export class SecretReferenceError extends Error {
   public constructor(
@@ -33,6 +35,15 @@ export class SecretReferenceError extends Error {
 export interface SecretReferenceResolver {
   supports(reference: string): boolean;
   resolve(reference: string, signal?: AbortSignal): Promise<Uint8Array>;
+}
+
+/** Writes only to an explicit protected-secret reference. Implementations must
+ * never fall back to plaintext files, process environment, or literal values. */
+export interface SecretReferenceStore {
+  supports(reference: string): boolean;
+  write(reference: string, secret: Uint8Array, signal?: AbortSignal): Promise<void>;
+  /** Returns false when the protected reference did not exist. */
+  delete(reference: string, signal?: AbortSignal): Promise<boolean>;
 }
 
 /** Routes references without introducing an environment-variable or plaintext fallback. */
