@@ -120,7 +120,10 @@ async function performAction(request: DesktopRequest): Promise<void> {
     ) {
       clearImportPreview("Preview canceled; no local records were changed.");
     }
-    if (result.ok) await refresh();
+    const refreshAfterAttempt =
+      typeof request !== "string" &&
+      ["add-account", "authorize-us-account", "sync-us-account"].includes(request.kind);
+    if (result.ok || refreshAfterAttempt) await refresh();
   } catch {
     showToast("The local desktop action could not be completed.");
   }
@@ -280,14 +283,19 @@ function renderAccountCards(accounts: AccountSummaryView[]): void {
     );
 
     const actions = element("div", "account-card-actions");
+    const consentActionRequired =
+      account.connectionType === "read_only_consent" &&
+      ["pending", "not_authorized", "reauthorization_required"].includes(account.authorizationState);
     const reconnect = element(
       "button",
       "button secondary",
       !account.active
         ? "Disconnected"
-        : account.connectionType === "read_only_consent"
-          ? "Reconnect"
-          : "Choose statement"
+        : account.connectionType === "official_statement_import"
+          ? "Choose statement"
+          : consentActionRequired
+            ? account.authorizationState === "pending" ? "Resume consent" : "Reconnect"
+            : account.authorizationState === "authorized" ? "Check & sync" : "Retry status & sync"
     );
     reconnect.type = "button";
     reconnect.disabled = !account.active;
@@ -307,7 +315,10 @@ function renderAccountCards(accounts: AccountSummaryView[]): void {
         showToast("U.S. access is not configured yet. The setup guide explains what is needed and offers a safe local test.");
         return;
       }
-      void performAction({ kind: "authorize-us-account", accountId: account.id });
+      void performAction({
+        kind: consentActionRequired ? "authorize-us-account" : "sync-us-account",
+        accountId: account.id
+      });
     });
     const disconnect = element("button", "button danger-outline", "Disconnect");
     disconnect.type = "button";
@@ -374,6 +385,7 @@ function renderPortfolioConfiguration(snapshot: DesktopSnapshot): void {
 function accountState(account: AccountSummaryView): { label: string; tone: string } {
   if (!account.active) return { label: "Disconnected", tone: "muted" };
   if (account.authorizationState === "authorized") return { label: "Consent stored", tone: "connected" };
+  if (account.authorizationState === "pending") return { label: "Consent paused · resume", tone: "attention" };
   if (account.authorizationState === "import_only" && account.queryReady) return { label: "Import data available", tone: "connected" };
   if (account.authorizationState === "import_only") return { label: "Configured · first import needed", tone: "attention" };
   if (account.authorizationState === "reauthorization_required") return { label: "Reconnect needed", tone: "attention" };
@@ -841,6 +853,11 @@ function updatePathGuidance(): void {
 
 function updateProviderAvailability(snapshot: DesktopSnapshot): void {
   const ready = latestProviderReadiness?.canStartConsent === true;
+  const setupPanel = byId("plaid-setup-card");
+  if (setupPanel.hidden) {
+    (byId("plaid-environment") as HTMLSelectElement).value = snapshot.provider.environment;
+    updatePlaidEnvironmentHelp();
+  }
   document.querySelectorAll<HTMLElement>("[data-account-path][data-us-personal='true']").forEach((card) => {
     card.classList.remove("unavailable");
     card.classList.toggle("setup-needed", !ready);

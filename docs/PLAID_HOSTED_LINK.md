@@ -110,7 +110,7 @@ A Hosted Link-enabled response has this relevant schema:
 }
 ```
 
-The app rejects a response with no `hosted_link_url`, keeps the `link_token` in privileged short-lived state, associates it with exactly one local account attempt and environment, and opens only the validated Plaid HTTPS URL. It never exposes the `link_token` to logs or support output.
+The app rejects a response with no `hosted_link_url`, stores the `link_token` and validated Hosted Link URL only inside the encrypted local vault, associates them with exactly one new-account attempt and environment, and opens only the validated Plaid HTTPS URL. This short-lived recovery record is written before browser launch so an app exit does not silently create a second Item on retry. It never exposes the `link_token` to the renderer, logs, configuration, or support output. Update-mode reconnect remains memory-only because it uses the already protected Item token and never creates a replacement Item.
 
 ### 2. `POST /link/token/get`
 
@@ -168,7 +168,7 @@ For this Transactions Item-add flow, the relevant current response schema is:
 
 Plaid's legacy `on_success` and `on_exit` session fields are deprecated; the app reads `results.item_add_results` and `exit`. The result array can contain multiple Items and accounts, but this personal-card profile requires exactly one Item and exactly one returned account. It validates that the account `type` is `credit` and its `subtype` is `credit card` or `charge card`, then verifies the Item's returned institution ID through `/institutions/get_by_id` and requires the exact environment-allowed name. Plaid documents `mask` as the last 2–4 characters and warns that it may be non-unique or differ from what the bank displays, so the encrypted exact provider account ID—not the mask—is the binding.
 
-No `finished_at`, a non-null exit/error, a null result, an empty result, an unexpected environment/institution/account, or an expired correlation is treated as connected. Detailed session data remains available for up to six hours after a session ends, so polling is bounded and a retry creates a fresh Link token rather than reusing stale state. Hosted Link has no frontend `onSuccess` callback available to this desktop app.
+No `finished_at`, a non-null exit/error, a null result, an empty result, or an unexpected environment/institution/account is treated as connected. While the encrypted correlation is still recoverable, **Resume consent** reuses that exact session instead of creating a duplicate Item. An expired recovered session receives a final `/link/token/get` status check because Plaid can retain session details for up to six hours; if completion cannot be safely recovered, the app deletes the stale local correlation and warns that remote cleanup is unconfirmed. Explicit cancellation, Disconnect, successful exchange, and confirmed expiry remove the recovery record. Hosted Link has no frontend `onSuccess` callback available to this desktop app.
 
 ### 3. Exchange and store the result
 
@@ -181,7 +181,7 @@ body:     { public_token: string }
 response: { access_token: string, item_id: string, request_id: string }
 ```
 
-Plaid access tokens do not expire by default and this flow does not invent a refresh token. The app stores the `access_token` securely with its `item_id`; it never displays or logs it. The adapter uses `/transactions/get` because the app's normalized read contract needs bounded date/offset snapshots: it sends the exact validated Plaid `account_id`, excludes pending transactions, validates `total_transactions`, and keeps paging until the requested result is complete. It preserves local account attribution; if the first sync fails after consent was stored, the UI asks the owner to use **Check now** rather than silently reauthorize.
+Plaid access tokens do not expire by default and this flow does not invent a refresh token. The app stores the `access_token` securely with its `item_id`; it never displays or logs it. The adapter uses `/transactions/get` because the app's normalized read contract needs bounded date/offset snapshots: it sends the exact validated Plaid `account_id`, excludes pending transactions, validates `total_transactions`, and keeps paging until the requested result is complete. It preserves local account attribution; if the first sync fails after consent was stored, the UI asks the owner to use **Check & sync** rather than silently reauthorize.
 
 ### 4. Update-mode reconnect
 

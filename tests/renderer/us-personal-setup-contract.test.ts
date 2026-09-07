@@ -110,4 +110,26 @@ describe("U.S. personal onboarding contract", () => {
     expect(configure).toContain("saveButton.disabled = true");
     expect(configure).toContain("saveButton.disabled = false");
   });
+
+  it("refreshes a failed add or consent attempt and reauthorizes only when required", () => {
+    const perform = functionSource("performAction", "refresh");
+    const accounts = functionSource("renderAccountCards", "savePortfolio");
+
+    expect(perform).toContain('["add-account", "authorize-us-account", "sync-us-account"]');
+    expect(accounts).toContain('"pending", "not_authorized", "reauthorization_required"');
+    expect(accounts).toContain('account.authorizationState === "pending" ? "Resume consent"');
+    expect(accounts).toContain('account.authorizationState === "authorized" ? "Check & sync"');
+    expect(accounts).toContain('kind: consentActionRequired ? "authorize-us-account" : "sync-us-account"');
+    expect(renderer).toContain('"Consent paused · resume"');
+    expect(html).toContain("Check &amp; sync U.S. accounts");
+    expect(html).not.toContain("Check local status");
+  });
+
+  it("restores the saved Plaid environment before reopening setup", () => {
+    const availability = functionSource("updateProviderAvailability", "renderProviderReadiness");
+
+    expect(availability).toContain("if (setupPanel.hidden)");
+    expect(availability).toContain("snapshot.provider.environment");
+    expect(availability).toContain("updatePlaidEnvironmentHelp();");
+  });
 });

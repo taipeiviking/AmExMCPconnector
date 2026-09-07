@@ -29,6 +29,10 @@ describe("nontechnical onboarding contract", () => {
     expect(renderer).toContain("showWizardStep();");
     expect(renderer).toContain("No account was added");
     expect(renderer).toContain('kind: "configure-plaid"');
+    expect(controller).toContain('account.authorization.state === "authorized"');
+    expect(controller).toContain('account.authorization.state === "unavailable"');
+    expect(controller).toContain('return await this.syncUsAccount(active, provider, accountId)');
+    expect(controller).toContain('recovered.state === "pending"');
   });
 
   it("moves a Japan statement action to the visible import review workflow", () => {

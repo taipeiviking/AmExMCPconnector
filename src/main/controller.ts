@@ -1660,6 +1660,25 @@ export class DesktopController {
       if (!account || !account.active || account.country !== "US" || account.collectionMethod !== "provider") {
         return { ok: false, message: "Select an active U.S. consent account on this installation." };
       }
+      // The authorize action is a defensive boundary as well as a UI action:
+      // healthy or transiently unavailable accounts must be checked/synced,
+      // never sent through an owner consent flow merely because a caller used
+      // the wrong desktop action.
+      if (
+        account.authorization.state === "authorized" ||
+        account.authorization.state === "unavailable"
+      ) {
+        return await this.syncUsAccount(active, provider, accountId);
+      }
+      if (
+        account.authorization.state !== "pending" &&
+        account.authorization.state !== "reauthorization_required"
+      ) {
+        return {
+          ok: false,
+          message: "This account is not eligible for a new consent attempt. Check its status or add a new separately identified account."
+        };
+      }
       priorBinding = await active.getProviderBinding?.(accountId);
       const consent = provider.kind === "plaid-hosted-link"
         ? await provider.oauth.beginHostedConsent(accountId, priorBinding?.providerAccountId)
@@ -1888,9 +1907,26 @@ export class DesktopController {
     error: unknown
   ): Promise<void> {
     if (!active.setProviderAuthorization || this.lifecycleState !== "running" || this.quitting) return;
+    if (
+      provider.kind === "plaid-hosted-link" &&
+      error instanceof ProviderIntegrationError &&
+      error.code === "PROVIDER_UNAVAILABLE"
+    ) {
+      try {
+        const recovered = await provider.oauth.checkAuthorization(accountId);
+        if (recovered.state === "pending") {
+          await active.setProviderAuthorization(accountId, recovered);
+          return;
+        }
+      } catch {
+        // Fall through to the fail-closed unavailable state. The provider
+        // adapter keeps any encrypted recoverable session independently.
+      }
+    }
     const authorizationRequired =
       error instanceof ProviderIntegrationError &&
-      error.code === "AUTHORIZATION_REQUIRED";
+      ["AUTHORIZATION_REQUIRED", "CONSENT_CANCELLED", "CONSENT_EXPIRED", "CONSENT_MISMATCH"]
+        .includes(error.code);
     const status: ProviderAuthorizationStatus = {
       providerId: provider.providerId,
       localAccountId: accountId,
