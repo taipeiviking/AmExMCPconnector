@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto";
+
+import { ExportApprovalError } from "../errors";
 import type { HmacExportApprovalAuthority } from "./approval";
 import { exportTransactionFingerprint } from "./duplicates";
 import {
@@ -19,34 +22,73 @@ export function generateExportPackage(input: {
   // JavaScript objects. Recompute before rendering so approval cannot be reused
   // for altered mappings, transactions, or duplicate reports.
   assertExportPlanIntegrity(input.plan);
-  input.approvalAuthority.consumeApproval(input.plan, input.approval);
+  if (input.generatedAt !== input.plan.createdAt) {
+    throw new ExportApprovalError("The generated timestamp differs from the approved export preview", {
+      planId: input.plan.id,
+    });
+  }
 
+  // Render before burning the one-time approval. A format/encoding validation
+  // failure therefore cannot consume an approval without producing a package.
+  const packageResult = renderExportPackage(input.plan, input.generatedAt);
+  input.approvalAuthority.consumeApproval(input.plan, input.approval);
+  return packageResult;
+}
+
+/**
+ * Computes byte metadata for the review screen without returning export bytes.
+ * Materialization still requires a valid one-time human approval.
+ */
+export function previewExportFiles(plan: ExportPlan): {
+  readonly files: readonly {
+    readonly fileName: string;
+    readonly mediaType: string;
+    readonly encoding: ExportFile["encoding"];
+    readonly byteLength: number;
+    readonly sha256: string;
+  }[];
+  readonly warnings: readonly string[];
+} {
+  assertExportPlanIntegrity(plan);
+  const packageResult = renderExportPackage(plan, plan.createdAt);
+  const files = packageResult.files.map((file) => ({
+    fileName: file.fileName,
+    mediaType: file.mediaType,
+    encoding: file.encoding,
+    byteLength: file.bytes.byteLength,
+    sha256: createHash("sha256").update(file.bytes).digest("hex"),
+  }));
+  for (const file of packageResult.files) file.bytes.fill(0);
+  return { files, warnings: packageResult.warnings };
+}
+
+function renderExportPackage(plan: ExportPlan, generatedAt: string): ExportPackage {
   let file: ExportFile;
   const warnings: string[] = [];
-  switch (input.plan.mapping.format) {
+  switch (plan.mapping.format) {
     case "quickbooks_csv":
-      file = buildQuickBooksCsv(input.plan.eligibleTransactions, input.plan.mapping);
+      file = buildQuickBooksCsv(plan.eligibleTransactions, plan.mapping);
       break;
     case "quickbooks_qbo":
-      file = buildQuickBooksOfx(input.plan.eligibleTransactions, input.plan.mapping, "qbo", input.generatedAt);
+      file = buildQuickBooksOfx(plan.eligibleTransactions, plan.mapping, "qbo", generatedAt);
       break;
     case "quickbooks_qfx":
-      file = buildQuickBooksOfx(input.plan.eligibleTransactions, input.plan.mapping, "qfx", input.generatedAt);
+      file = buildQuickBooksOfx(plan.eligibleTransactions, plan.mapping, "qfx", generatedAt);
       break;
     case "money_forward_statement_csv": {
-      const built = buildMoneyForwardStatementCsv(input.plan.eligibleTransactions, input.plan.mapping);
+      const built = buildMoneyForwardStatementCsv(plan.eligibleTransactions, plan.mapping);
       file = built.file;
       if (built.warning !== undefined) warnings.push(built.warning);
       break;
     }
     case "money_forward_journal_csv": {
-      const built = buildMoneyForwardJournalCsv(input.plan.eligibleTransactions, input.plan.mapping);
+      const built = buildMoneyForwardJournalCsv(plan.eligibleTransactions, plan.mapping);
       file = built.file;
       if (built.warning !== undefined) warnings.push(built.warning);
       break;
     }
     case "money_forward_ledger_csv": {
-      const built = buildMoneyForwardLedgerCsv(input.plan.eligibleTransactions, input.plan.mapping);
+      const built = buildMoneyForwardLedgerCsv(plan.eligibleTransactions, plan.mapping);
       file = built.file;
       if (built.warning !== undefined) warnings.push(built.warning);
       break;
@@ -54,19 +96,19 @@ export function generateExportPackage(input: {
   }
 
   return {
-    planId: input.plan.id,
-    format: input.plan.mapping.format,
-    accountId: input.plan.mapping.accountId,
-    legalEntityId: input.plan.mapping.legalEntityId,
-    createdAt: input.generatedAt,
+    planId: plan.id,
+    format: plan.mapping.format,
+    accountId: plan.mapping.accountId,
+    legalEntityId: plan.mapping.legalEntityId,
+    createdAt: generatedAt,
     files: [file],
-    duplicateReport: structuredClone(input.plan.duplicates),
-    historyRecords: input.plan.eligibleTransactions.map((transaction) => ({
-      format: input.plan.mapping.format,
-      accountId: input.plan.mapping.accountId,
+    duplicateReport: structuredClone(plan.duplicates),
+    historyRecords: plan.eligibleTransactions.map((transaction) => ({
+      format: plan.mapping.format,
+      accountId: plan.mapping.accountId,
       transactionId: transaction.id,
       transactionFingerprint: exportTransactionFingerprint(transaction),
-      exportedAt: input.generatedAt,
+      exportedAt: generatedAt,
     })),
     warnings,
     automaticPosting: false,

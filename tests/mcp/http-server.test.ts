@@ -22,6 +22,16 @@ function service(): FinanceReadService {
 }
 
 describe("McpHttpServer", () => {
+  it("rejects invalid concurrent-request caps", () => {
+    expect(() => new McpHttpServer(service(), {
+      host: "127.0.0.1",
+      port: 0,
+      path: "/mcp",
+      rateLimitPerMinute: 10,
+      maxConcurrentRequests: 0
+    })).toThrow(/concurrent request cap/u);
+  });
+
   it("binds a private health endpoint and rejects browser origins", async () => {
     const server = new McpHttpServer(service(), {
       host: "127.0.0.1",
@@ -62,5 +72,35 @@ describe("McpHttpServer", () => {
       body: "{}"
     });
     expect(response.status).toBe(401);
+  });
+
+  it("does not let failed authentication consume the authenticated request budget", async () => {
+    const server = new McpHttpServer(service(), {
+      host: "127.0.0.1",
+      port: 0,
+      path: "/mcp",
+      rateLimitPerMinute: 1,
+      unauthenticatedRateLimitPerMinute: 1,
+      bearerToken: "synthetic-test-token"
+    });
+    running.push(server);
+    const status = await server.start();
+    const health = `${new URL(status.endpoint!).origin}/healthz`;
+
+    const unauthorized = await fetch(health);
+    expect(unauthorized.status).toBe(401);
+
+    const authorized = await fetch(health, {
+      headers: { Authorization: "Bearer synthetic-test-token" }
+    });
+    expect(authorized.status).toBe(200);
+
+    const boundedUnauthorized = await fetch(health);
+    expect(boundedUnauthorized.status).toBe(429);
+
+    const boundedAuthorized = await fetch(health, {
+      headers: { Authorization: "Bearer synthetic-test-token" }
+    });
+    expect(boundedAuthorized.status).toBe(429);
   });
 });

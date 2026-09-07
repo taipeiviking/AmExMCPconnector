@@ -12,6 +12,7 @@ describe("loadConfiguration", () => {
       true
     );
     expect(packaged.AMEX_APP_ENV).toBe("production");
+    expect(packaged.AMEX_MCP_MODE).toBe("disabled");
     expect(() => loadConfiguration({ environment: packaged })).toThrow(/Demo data is forbidden in production/u);
 
     const development = environmentForRuntime({ AMEX_APP_ENV: "test" }, false);
@@ -44,6 +45,21 @@ describe("loadConfiguration", () => {
     ).toThrow(/TOKEN_REF/);
   });
 
+  it("allows the MCP page cap to narrow but not broaden the 200-row tool contract", () => {
+    expect(loadConfiguration({
+      environment: { ...baseEnvironment, AMEX_MCP_MAX_PAGE_SIZE: "25" }
+    }).mcp.maxPageSize).toBe(25);
+    expect(() => loadConfiguration({
+      environment: { ...baseEnvironment, AMEX_MCP_MAX_PAGE_SIZE: "201" }
+    })).toThrow();
+  });
+
+  it("requires an absolute category mapping path", () => {
+    expect(() => loadConfiguration({
+      environment: { ...baseEnvironment, AMEX_CATEGORY_MAPPING_FILE: ".\\categories.json" }
+    })).toThrow(/absolute local path/u);
+  });
+
   it.each([
     ["AMEX_DATABASE_FILE", "..\\outside.db.enc"],
     ["AMEX_IMPORT_STAGING_DIR", "C:\\outside\\imports"],
@@ -71,15 +87,83 @@ describe("loadConfiguration", () => {
         }
       })
     ).toThrow(/approval/);
+
+    expect(() =>
+      loadConfiguration({
+        environment: {
+          ...baseEnvironment,
+          AMEX_APP_ENV: "production",
+          AMEX_MCP_MODE: "local",
+          AMEX_MCP_AUTH_MODE: "loopback-only"
+        }
+      })
+    ).toThrow(/requires bearer authentication/u);
+
+    expect(() =>
+      loadConfiguration({
+        environment: {
+          ...baseEnvironment,
+          AMEX_APP_ENV: "production",
+          AMEX_MCP_MODE: "disabled",
+          AMEX_MCP_AUTH_MODE: "loopback-only"
+        }
+      })
+    ).not.toThrow();
   });
 
   it("requires conditional tunnel and provider settings", () => {
     expect(() =>
-      loadConfiguration({ environment: { ...baseEnvironment, OPENAI_TUNNEL_ENABLED: "true" } })
+      loadConfiguration({
+        environment: {
+          ...baseEnvironment,
+          AMEX_MCP_MODE: "tunnel",
+          AMEX_MCP_AUTH_MODE: "bearer",
+          AMEX_MCP_BEARER_TOKEN_REF: "wincred:AmexLocalFinanceConnector/McpBearerToken",
+          OPENAI_TUNNEL_ENABLED: "true",
+          OPENAI_TUNNEL_CLIENT_PATH: "C:\\Program Files\\ApprovedTunnel\\tunnel.exe",
+          OPENAI_TUNNEL_CLIENT_SHA256: "a".repeat(64),
+          OPENAI_TUNNEL_ARGUMENTS_JSON: '["--url={localMcpEndpoint}"]'
+        }
+      })
     ).toThrow(/TUNNEL_ID/);
 
     expect(() =>
-      loadConfiguration({ environment: { ...baseEnvironment, AMEX_US_AGGREGATOR: "approved-provider" } })
+      loadConfiguration({ environment: { ...baseEnvironment, AMEX_US_AGGREGATOR: "approved-provider-generic" } })
     ).toThrow(/aggregation/);
+  });
+
+  it("never exposes a tunneled loopback endpoint without bearer authentication", () => {
+    const tunnelBase: NodeJS.ProcessEnv = {
+      ...baseEnvironment,
+      OPENAI_TUNNEL_ENABLED: "true",
+      OPENAI_TUNNEL_ID: "owner-tunnel",
+      OPENAI_TUNNEL_CLIENT_PATH: "C:\\Program Files\\ApprovedTunnel\\tunnel.exe",
+      OPENAI_TUNNEL_CLIENT_SHA256: "a".repeat(64),
+      OPENAI_TUNNEL_ARGUMENTS_JSON: '["--url={localMcpEndpoint}"]'
+    };
+
+    expect(() => loadConfiguration({ environment: tunnelBase })).toThrow(/MCP_MODE must be tunnel/u);
+    expect(() =>
+      loadConfiguration({ environment: { ...tunnelBase, AMEX_MCP_MODE: "tunnel" } })
+    ).toThrow(/bearer authentication/u);
+    expect(() =>
+      loadConfiguration({
+        environment: {
+          ...tunnelBase,
+          AMEX_MCP_MODE: "tunnel",
+          AMEX_MCP_AUTH_MODE: "bearer",
+          AMEX_MCP_BEARER_TOKEN_REF: "wincred:AmexLocalFinanceConnector/McpBearerToken"
+        }
+      })
+    ).not.toThrow();
+  });
+
+  it("rejects contradictory tunnel mode and auto-start settings", () => {
+    expect(() =>
+      loadConfiguration({ environment: { ...baseEnvironment, AMEX_MCP_MODE: "tunnel" } })
+    ).toThrow(/OPENAI_TUNNEL_ENABLED must be true/u);
+    expect(() =>
+      loadConfiguration({ environment: { ...baseEnvironment, OPENAI_TUNNEL_AUTO_START: "true" } })
+    ).toThrow(/auto-start.*disabled/u);
   });
 });

@@ -13,6 +13,7 @@ export type DesktopAction =
   | "open-log-folder"
   | "open-tunnel-docs"
   | "run-safe-test-drive"
+  | "save-synthetic-sample-statement"
   | "delete-all-local-data"
   | "lock";
 
@@ -26,7 +27,45 @@ export type DesktopRequest =
       legalEntityName: string;
     }
   | { kind: "rename-account"; accountId: string; label: string }
-  | { kind: "disconnect-account"; accountId: string };
+  | { kind: "disconnect-account"; accountId: string }
+  | { kind: "update-portfolio"; name: string; accountIds: string[] }
+  | {
+      kind: "set-alert-status";
+      alertId: string;
+      status: "reviewed" | "dismissed" | "confirmed_suspicious";
+    }
+  | {
+      kind: "import-jp-statement";
+      accountId: string;
+      periodStart?: string;
+      periodEnd?: string;
+      openingBalance?: string;
+      closingBalance?: string;
+    }
+  | { kind: "approve-jp-import"; previewId: string }
+  | { kind: "cancel-jp-import"; previewId: string }
+  | { kind: "authorize-us-account"; accountId: string }
+  | {
+      kind: "prepare-export";
+      accountId: string;
+      format:
+        | "quickbooks_csv"
+        | "quickbooks_qbo"
+        | "quickbooks_qfx"
+        | "money_forward_statement_csv"
+        | "money_forward_journal_csv"
+        | "money_forward_ledger_csv";
+      accountName: string;
+      accountReference?: string;
+      bankId?: string;
+      liabilityAccount?: string;
+      expenseAccount?: string;
+      department?: string;
+      taxCategory?: string;
+      encoding?: "utf8_bom" | "shift_jis";
+    }
+  | { kind: "sync-us-account"; accountId: string }
+  | { kind: "set-tunnel-running"; running: boolean };
 
 export interface LocalTestDriveCheck {
   id: string;
@@ -53,6 +92,7 @@ export interface AccountSummaryView {
   connectionType: "read_only_consent" | "official_statement_import";
   active: boolean;
   queryReady: boolean;
+  inPortfolio: boolean;
 }
 
 export interface AlertSummaryView {
@@ -79,6 +119,12 @@ export interface DesktopSnapshot {
   environment: string;
   demoMode: boolean;
   portfolioId: string;
+  portfolio: {
+    id: string;
+    name: string;
+    accountIds: string[];
+    editable: boolean;
+  };
   baseCurrency: string;
   storage: {
     state: "locked" | "unlocked" | "unavailable";
@@ -95,8 +141,14 @@ export interface DesktopSnapshot {
     enabled: boolean;
     autoStart: boolean;
     configured: boolean;
-    state: "disabled" | "manual" | "not-configured";
+    state: "disabled" | "stopped" | "starting" | "running" | "stopping" | "error" | "not-configured";
     tunnelIdHint?: string;
+    lastError?: string;
+  };
+  provider: {
+    configured: boolean;
+    adapter: string;
+    environment: "sandbox" | "production";
   };
   accounts: AccountSummaryView[];
   alerts: AlertSummaryView[];
@@ -113,6 +165,55 @@ export interface DesktopActionResult {
     extension: string;
   };
   testDrive?: LocalTestDriveResult;
+  importPreview?: {
+    previewId: string;
+    accountId: string;
+    fileName: string;
+    format: string;
+    encoding?: string;
+    sourceFingerprint: string;
+    expiresAt: string;
+    rows: Array<{
+      postedAt: string;
+      description: string;
+      amount: string;
+      currency: string;
+      categoryId: string | null;
+      businessPurpose: string | null;
+      sourceRow: number;
+    }>;
+    totals: Array<{ currency: string; signedTotal: string; transactionCount: number }>;
+    duplicateCount: number;
+    warningCount: number;
+    warnings: string[];
+    reconciliationStatus: string;
+    reconciliationDifference?: string;
+    mappingMatchedCount: number;
+    mappingFingerprint?: string;
+  };
+  importSummary?: {
+    accountId: string;
+    fileName: string;
+    parsed: number;
+    imported: number;
+    duplicatesSkipped: number;
+    warnings: number;
+    periodStart?: string;
+    periodEnd?: string;
+  };
+  exportSummary?: {
+    accountId: string;
+    format: string;
+    exported: number;
+    duplicatesSkipped: number;
+    files: string[];
+    destinationDirectory: string;
+    committedPaths: string[];
+    publicationStatus: "published";
+    journalStatus: "completed" | "completion_unconfirmed";
+    auditStatus: "recorded" | "unconfirmed";
+    warning?: string;
+  };
 }
 
 export interface DesktopBridge {

@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { timingSafeEqual } from "node:crypto";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createFinanceMcpServer, type FinanceReadService } from "./create-mcp-server";
 
@@ -9,6 +10,11 @@ export interface McpHttpServerOptions {
   rateLimitPerMinute: number;
   bearerToken?: string;
   maxBodyBytes?: number;
+  requestTimeoutMs?: number;
+  maximumPageSize?: number;
+  maxConcurrentRequests?: number;
+  unauthenticatedRateLimitPerMinute?: number;
+  onActivity?: () => void;
 }
 
 export interface McpHttpServerStatus {
@@ -20,12 +26,29 @@ export interface McpHttpServerStatus {
 export class McpHttpServer {
   private server?: Server;
   private statusValue: McpHttpServerStatus = { state: "stopped" };
-  private readonly buckets = new Map<string, { windowStart: number; count: number }>();
+  private readonly authenticatedBuckets = new Map<string, { windowStart: number; count: number }>();
+  private readonly unauthenticatedBuckets = new Map<string, { windowStart: number; count: number }>();
+  private readonly unauthenticatedRateLimitPerMinute: number;
+  private activeRequests = 0;
 
   constructor(
     private readonly service: FinanceReadService,
     private readonly options: McpHttpServerOptions
-  ) {}
+  ) {
+    if (!Number.isSafeInteger(options.rateLimitPerMinute) || options.rateLimitPerMinute < 1) {
+      throw new Error("The authenticated MCP rate limit must be a positive integer.");
+    }
+    const maximum = options.maxConcurrentRequests ?? 8;
+    if (!Number.isSafeInteger(maximum) || maximum < 1 || maximum > 64) {
+      throw new Error("The MCP concurrent request cap must be an integer from 1 to 64.");
+    }
+    const unauthenticatedMaximum = options.unauthenticatedRateLimitPerMinute ??
+      Math.min(options.rateLimitPerMinute, 30);
+    if (!Number.isSafeInteger(unauthenticatedMaximum) || unauthenticatedMaximum < 1) {
+      throw new Error("The unauthenticated MCP rate limit must be a positive integer.");
+    }
+    this.unauthenticatedRateLimitPerMinute = unauthenticatedMaximum;
+  }
 
   get status(): McpHttpServerStatus {
     return { ...this.statusValue };
@@ -75,10 +98,18 @@ export class McpHttpServer {
       });
     }
     this.statusValue = { state: "stopped" };
-    this.buckets.clear();
+    this.authenticatedBuckets.clear();
+    this.unauthenticatedBuckets.clear();
   }
 
   private async route(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    const requestTimeout = this.options.requestTimeoutMs ?? 30_000;
+    let counted = false;
+    request.setTimeout(requestTimeout, () => {
+      if (!response.headersSent) this.json(response, 408, { error: "request_timed_out" });
+      else response.end();
+      request.destroy();
+    });
     try {
       this.applySecurityHeaders(response);
       if (!this.isLoopbackRequest(request) || !this.hasValidHostHeader(request)) {
@@ -87,14 +118,28 @@ export class McpHttpServer {
       if (request.headers.origin) {
         return this.json(response, 403, { error: "browser_origins_not_accepted" });
       }
-      if (!this.withinRateLimit(request)) {
-        response.setHeader("Retry-After", "60");
-        return this.json(response, 429, { error: "rate_limited" });
-      }
       if (!this.isAuthorized(request)) {
+        if (!this.withinRateLimit(
+          request,
+          this.unauthenticatedBuckets,
+          this.unauthenticatedRateLimitPerMinute,
+        )) {
+          response.setHeader("Retry-After", "60");
+          return this.json(response, 429, { error: "rate_limited" });
+        }
         response.setHeader("WWW-Authenticate", 'Bearer realm="amex-local-mcp"');
         return this.json(response, 401, { error: "unauthorized" });
       }
+      if (!this.withinRateLimit(request, this.authenticatedBuckets, this.options.rateLimitPerMinute)) {
+        response.setHeader("Retry-After", "60");
+        return this.json(response, 429, { error: "rate_limited" });
+      }
+      if (this.activeRequests >= (this.options.maxConcurrentRequests ?? 8)) {
+        return this.json(response, 503, { error: "concurrency_limit_reached" });
+      }
+      this.activeRequests += 1;
+      counted = true;
+      this.options.onActivity?.();
 
       const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "127.0.0.1"}`);
       if (url.pathname === "/healthz" && request.method === "GET") {
@@ -116,7 +161,11 @@ export class McpHttpServer {
       }
 
       const body = await this.readJsonBody(request);
-      const mcpServer = createFinanceMcpServer(this.service);
+      const mcpServer = createFinanceMcpServer(this.service, {
+        ...(this.options.maximumPageSize === undefined
+          ? {}
+          : { maximumPageSize: this.options.maximumPageSize })
+      });
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
       await mcpServer.connect(transport);
       response.on("close", () => {
@@ -138,6 +187,8 @@ export class McpHttpServer {
       } else {
         response.end();
       }
+    } finally {
+      if (counted) this.activeRequests = Math.max(0, this.activeRequests - 1);
     }
   }
 
@@ -179,19 +230,32 @@ export class McpHttpServer {
 
   private isAuthorized(request: IncomingMessage): boolean {
     if (!this.options.bearerToken) return true;
-    return request.headers.authorization === `Bearer ${this.options.bearerToken}`;
+    const supplied = request.headers.authorization;
+    if (supplied === undefined) return false;
+    const expectedBytes = Buffer.from(`Bearer ${this.options.bearerToken}`, "utf8");
+    const suppliedBytes = Buffer.from(supplied, "utf8");
+    try {
+      return expectedBytes.byteLength === suppliedBytes.byteLength && timingSafeEqual(expectedBytes, suppliedBytes);
+    } finally {
+      expectedBytes.fill(0);
+      suppliedBytes.fill(0);
+    }
   }
 
-  private withinRateLimit(request: IncomingMessage): boolean {
+  private withinRateLimit(
+    request: IncomingMessage,
+    buckets: Map<string, { windowStart: number; count: number }>,
+    maximum: number,
+  ): boolean {
     const key = request.socket.remoteAddress ?? "loopback";
     const now = Date.now();
-    const bucket = this.buckets.get(key);
+    const bucket = buckets.get(key);
     if (!bucket || now - bucket.windowStart >= 60_000) {
-      this.buckets.set(key, { windowStart: now, count: 1 });
+      buckets.set(key, { windowStart: now, count: 1 });
       return true;
     }
     bucket.count += 1;
-    return bucket.count <= this.options.rateLimitPerMinute;
+    return bucket.count <= maximum;
   }
 
   private applySecurityHeaders(response: ServerResponse): void {

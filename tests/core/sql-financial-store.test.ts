@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   createDemoSnapshot,
+  EncryptedSqlFinancialStore,
   openEncryptedCore,
   type AuditEvent,
   ValidationError,
@@ -30,6 +31,20 @@ afterEach(async () => {
 });
 
 describe("EncryptedSqlFinancialStore", () => {
+  it("migrates version-one stores to bounded global-order indexes", async () => {
+    const database = {
+      query: vi.fn(() => [{ user_version: 1 }]),
+      exec: vi.fn(),
+      save: vi.fn(async () => undefined),
+    } as unknown as EncryptedSqlJsDatabase;
+    const store = new EncryptedSqlFinancialStore(database);
+
+    await store.initialize();
+
+    expect(database.exec).toHaveBeenCalledWith(expect.stringContaining("idx_transactions_date_id_account"));
+    expect(database.save).toHaveBeenCalledTimes(1);
+  });
+
   it("round-trips the typed financial model and durable audit log in encrypted storage", async () => {
     const directory = await mkdtemp(join(tmpdir(), "amex-financial-store-"));
     createdDirectories.push(directory);
@@ -60,6 +75,42 @@ describe("EncryptedSqlFinancialStore", () => {
     expect((await reopened.store.loadSnapshot()).accounts).toHaveLength(4);
     expect(await reopened.store.listAuditEvents()).toHaveLength(2);
     await reopened.store.close();
+  });
+
+  it("enforces bounded SQL keyset reads in canonical order", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "amex-keyset-store-"));
+    createdDirectories.push(directory);
+    const runtime = await openEncryptedCore({
+      filePath: join(directory, "finance.db.enc"),
+      keyProtector: new TestKeyProtector(),
+    });
+    const account = makeAccount();
+    const transactions = [
+      makeTransaction(account, { id: "txn-b", postedAt: "2026-01-03", importFingerprint: "fingerprint-txn-b-000000" }),
+      makeTransaction(account, { id: "txn-c", postedAt: "2026-01-02", importFingerprint: "fingerprint-txn-c-000000" }),
+      makeTransaction(account, { id: "txn-a", postedAt: "2026-01-03", importFingerprint: "fingerprint-txn-a-000000" }),
+    ];
+    await runtime.store.replaceSnapshot({
+      accounts: [account],
+      portfolios: [makePortfolio([account])],
+      transactions,
+      statements: [],
+      fraudAlerts: [],
+    });
+
+    const first = await runtime.store.listTransactions({ accountIds: [account.id], limit: 2 });
+    const second = await runtime.store.listTransactions({
+      accountIds: [account.id],
+      after: { postedAt: first[1]!.postedAt, id: first[1]!.id },
+      limit: 2,
+    });
+
+    expect(first.map((transaction) => transaction.id)).toEqual(["txn-a", "txn-b"]);
+    expect(second.map((transaction) => transaction.id)).toEqual(["txn-c"]);
+    await expect(runtime.store.listTransactions({ accountIds: [account.id], limit: 5_001 })).rejects.toThrow(
+      /Read limit/u,
+    );
+    await runtime.store.close();
   });
 
   it("commits a snapshot and its audit event with one encrypted save", async () => {

@@ -34,6 +34,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run package:win -- --publish never
+      - run: npm run smoke:packaged
       - uses: actions/upload-artifact@v7
         with:
           name: unsigned-windows-installer

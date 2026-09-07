@@ -12,9 +12,9 @@ The application is one connector with many account authorizations. It is not one
 The first release has two access modes:
 
 1. **Fully local mode.** The application, database, import/export workflows, and MCP server stay on the Windows computer. The MCP transport is stdio or a loopback-only HTTP listener. No tunnel is started.
-2. **ChatGPT-connected private mode.** The tray application supervises OpenAI `tunnel-client`, which initiates an outbound HTTPS connection while the application is running and forwards requests to the local MCP server. The local server is never bound to a public interface and no inbound firewall port is opened.
+2. **ChatGPT-connected private mode (externally gated).** When the intended OpenAI organization supplies an authoritative Secure MCP Tunnel client/profile contract, the tray application can supervise that vetted, hash-pinned outbound client while the app is running. The local server remains on loopback and no application-managed inbound firewall port is opened. Until availability and the exact client contract are verified, connected mode stays disabled.
 
-OpenAI's official [Secure MCP Tunnel guide](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels) describes this outbound-only private-server pattern and its runtime requirements. The general [MCP and Connectors guide](https://developers.openai.com/api/docs/guides/tools-connectors-mcp) describes remote MCP servers and connectors. These links are implementation references, not a promise that a particular OpenAI plan, organization, or workspace has tunnel access; availability and permissions must be verified for the intended deployment.
+OpenAI's current [custom MCP app guidance](https://help.openai.com/en/articles/12584461-developer-mode-and-full-mcp-connectors-in-chatgpt-beta) describes workspace setup, permissions, testing, and publication. A workspace-supported Secure MCP Tunnel is the intended outbound-only private-server path here, but the public material verified during implementation did not establish a generally available client download or stable CLI contract. Availability, authoritative client instructions, and permissions must be verified for the intended deployment.
 
 ## Non-negotiable invariants
 
@@ -42,8 +42,8 @@ flowchart LR
     App --> Export[Human-approved export packages]
     App --> MCP[Read-only MCP adapter]
     LocalClient[Local MCP client] -->|stdio or loopback| MCP
-    MCP <-->|local only| Tunnel[tunnel-client supervised by app]
-    Tunnel <-->|outbound HTTPS while running| OpenAI[OpenAI-hosted tunnel endpoint]
+    MCP <-->|local loopback| Tunnel[vetted tunnel client supervised by app]
+    Tunnel -.->|intended outbound path; externally verified| OpenAI[OpenAI-hosted tunnel endpoint]
     ChatGPT[Supported OpenAI product] --> OpenAI
 ```
 
@@ -53,12 +53,12 @@ The diagram shows a data path, not a data-residency guarantee for query results.
 
 ### Tray host and desktop UI
 
-The signed Windows desktop process starts in the system tray and owns application lifetime. Its UI provides:
+The Windows desktop process starts in the system tray and owns application lifetime. The local alpha is unsigned; a signed process is a production release gate. Its UI provides:
 
 - account consent and connection status;
 - Japan statement import and validation review;
 - account metadata, legal-entity mappings, and portfolio membership;
-- category and business-purpose review;
+- import-time application of an owner-authored, versioned category/business-purpose mapping file;
 - reconciliation and anomaly/fraud review queues;
 - export preview and explicit approval;
 - tunnel state, last-sync state, and audit-log inspection.
@@ -74,7 +74,7 @@ Use-case services enforce policy before calling adapters. Important services are
 - **Import service:** parses supported official statement exports in an isolated staging workflow.
 - **Normalization service:** converts provider/file records into immutable source-scoped statements and transactions.
 - **Reconciliation service:** compares statement boundaries, balances, totals, and row-level completeness.
-- **Classification service:** applies versioned category mappings and records owner overrides without destroying source descriptions.
+- **Classification service:** applies the owner-authored versioned mapping snapshot during reviewed import without changing source descriptions. Per-row overrides/reclassification are later work.
 - **Portfolio service:** computes owner-selected cross-account reports while preserving source attribution.
 - **Anomaly service:** creates review-only alerts with explainable evidence.
 - **Export service:** previews mappings, detects duplicates, records approval, and atomically materializes packages.
@@ -126,13 +126,13 @@ Appending a redacted tool-access audit event and operational metrics does not ch
 The tunnel supervisor is optional and off by default until configured. When enabled, it:
 
 1. verifies the MCP server is bound to stdio or loopback only;
-2. obtains the `tunnel_id` and runtime credential by secret reference;
-3. starts the pinned, integrity-checked OpenAI `tunnel-client` as a child process;
-4. monitors health and exposes state in the tray;
-5. redacts child-process output before logging;
+2. requires a non-secret tunnel identifier and an already provisioned protected client profile; the app never receives the profile credential;
+3. starts the pinned, integrity-checked vetted client as a child process without putting secrets in arguments or environment variables;
+4. exposes process state and reports route health as unknown unless the approved adapter provides a real health check;
+5. captures no child-process output in the alpha, preventing accidental credential/log reflection;
 6. terminates the child on application exit, user disablement, Windows session lock if configured, or repeated security-significant failures.
 
-The OpenAI guide states that `tunnel-client` initiates outbound HTTPS and forwards work to a locally reachable MCP server. The configured OpenAI-hosted endpoint may continue to exist when the desktop app is stopped, but it cannot reach this installation without the running client. “Available only while the app runs” therefore means the local forwarding client and MCP service are not running; it does not imply automatic deletion of the Platform tunnel configuration.
+Public OpenAI material reviewed for this alpha does not establish a generally available Secure MCP Tunnel client, stable Windows CLI, endpoint lifecycle, or role contract. The adapter therefore accepts only an operator-reviewed argument template and verified executable/profile supplied through an authoritative deployment channel; it does not guess vendor commands. “Available only while the app runs” is an application lifecycle promise about the supervised process and local MCP service, not a claim that any externally provisioned tunnel object is deleted. Forced process termination/OS crash and orphan-containment behavior must be verified for the chosen client before a connected release.
 
 The application must not substitute a generic public reverse proxy, public port-forward, or public MCP deployment. If Secure MCP Tunnel is unavailable to the user's OpenAI context, connected mode is unavailable and fully local mode remains functional.
 
@@ -215,7 +215,7 @@ No MCP tool can enter this flow, and no component sends the package to QuickBook
 - Source statements and transactions are immutable after commit. Corrections are modeled as superseding imports/provider versions with lineage.
 - Deduplication identifies candidates; ambiguous matches require review and are never silently discarded.
 - Reconciliation records the statement opening/closing balance, sum of activity, currency, parser/provider version, tolerance, and outcome.
-- Categories and business-purpose classifications are versioned assignments. The original merchant text and source category remain intact.
+- Categories and business-purpose classifications are bound to the reviewed mapping-file fingerprint. Original merchant/description text remains intact; untrusted category/purpose columns from statement files are ignored in the alpha.
 - Original amounts/currencies are canonical. Converted totals are derived using a named FX rate, rate date, quote/base currency, precision, and retrieval time.
 - Cross-currency totals are not presented without an explicit reporting currency and FX provenance.
 - Anomaly/fraud alerts store features and reason codes sufficient for review. Alert status changes happen only in the UI; MCP explanation is side-effect free.
@@ -258,7 +258,7 @@ The Windows installer is built for Windows 11 x64 first. Release artifacts shoul
 
 ## References and review cadence
 
-- [OpenAI: Secure MCP Tunnel](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)
+- [OpenAI: developer mode and custom MCP apps](https://help.openai.com/en/articles/12584461-developer-mode-and-full-mcp-connectors-in-chatgpt-beta)
 - [OpenAI: MCP and Connectors](https://developers.openai.com/api/docs/guides/tools-connectors-mcp)
 
 Recheck these official references before implementing or releasing connected mode because product availability, permission models, client configuration, and network requirements can change. Record the verified date and tunnel-client version in the release evidence.

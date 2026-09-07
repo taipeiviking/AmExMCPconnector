@@ -3,7 +3,7 @@
 Contract version: `2026-08-31`
 Status: target first-release specification
 
-The runnable scaffold enforces the seven-tool/explicit-target/read-only boundary and returns minimized allowlisted DTOs, but it does not yet implement every filter, freshness field, reconciliation field, authenticated cursor, or reporting option below. The registered runtime schemas and the development-status section in the README are authoritative for the current scaffold; closing that gap is a 1.0 release gate.
+The runnable local alpha enforces the seven-tool/explicit-target/read-only boundary and returns minimized allowlisted DTOs, but the longer production contract below includes filters, freshness/reconciliation fields, authenticated cursors, and reporting options that are not all exposed yet. The registered runtime schemas and the development-status section in the README are authoritative for current behavior; closing that gap is a production release gate.
 
 ## Capability boundary
 
@@ -36,7 +36,7 @@ All tools should publish MCP annotations equivalent to:
 
 Annotations are descriptive hints, not the enforcement boundary. Read-only enforcement comes from module capability separation, read transactions, schema validation, tests, and code review.
 
-OpenAI's current [MCP and Connectors guide](https://developers.openai.com/api/docs/guides/tools-connectors-mcp) is the integration reference. Private connected mode uses the official [Secure MCP Tunnel](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels); no tool accepts OpenAI credentials or tunnel configuration as input.
+OpenAI's current [custom MCP app guidance](https://help.openai.com/en/articles/12584461-developer-mode-and-full-mcp-connectors-in-chatgpt-beta) is the public workspace integration reference. Private connected mode is designed for a workspace-supported Secure MCP Tunnel whose exact client/profile contract is verified separately; no financial tool accepts OpenAI credentials or tunnel configuration as input.
 
 ## Common conventions
 
@@ -130,6 +130,8 @@ Unless a stricter tool limit is documented:
 - sort order is deterministic with local ID as the final tiebreaker.
 
 Changing a filter or target requires starting without the previous cursor. Invalid/expired/mismatched cursors return `CURSOR_INVALID`, not partial data.
+
+The current runnable alpha implements bounded `postedAt DESC, id ASC` keyset reads for `list_transactions`; it requests only one row beyond the requested page to decide whether a continuation cursor is needed. Its present cursor is versioned and target/filter scoped, but is not yet cryptographically authenticated, expiry-bound, or tied to a database snapshot marker as required by the longer production contract above. Portfolio reports aggregate exact decimal totals in bounded store pages and fail with an instruction to narrow the date range if more than 250,000 transactions would be processed; they never return silently truncated totals.
 
 ### Common response envelope
 

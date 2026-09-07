@@ -23,6 +23,7 @@ export class HmacExportApprovalAuthority {
   readonly #now: () => Date;
   readonly #ttlMs: number;
   readonly #consumedTokenDigests = new Map<string, number>();
+  #closed = false;
 
   public constructor(secret: Uint8Array, options: { readonly now?: () => Date; readonly ttlMs?: number } = {}) {
     if (secret.byteLength < 32) {
@@ -38,6 +39,7 @@ export class HmacExportApprovalAuthority {
     readonly approvedBy: string;
     readonly confirmation: string;
   }): HumanExportApproval {
+    this.#assertOpen();
     if (input.confirmation !== CONFIRMATION_PHRASE) {
       throw new ExportApprovalError("The human approval confirmation phrase was not provided");
     }
@@ -65,6 +67,7 @@ export class HmacExportApprovalAuthority {
   }
 
   public assertApproved(plan: ExportPlan, approval: HumanExportApproval): void {
+    this.#assertOpen();
     this.#validateApproval(plan, approval);
   }
 
@@ -74,6 +77,7 @@ export class HmacExportApprovalAuthority {
    * both pass before either records consumption.
    */
   public consumeApproval(plan: ExportPlan, approval: HumanExportApproval): void {
+    this.#assertOpen();
     const payload = this.#validateApproval(plan, approval);
     this.#pruneConsumed();
     const tokenDigest = createHash("sha256").update(approval.token, "utf8").digest("hex");
@@ -135,6 +139,18 @@ export class HmacExportApprovalAuthority {
     for (const [digest, expiresAt] of this.#consumedTokenDigests) {
       if (!Number.isFinite(expiresAt) || expiresAt <= now) this.#consumedTokenDigests.delete(digest);
     }
+  }
+
+  /** Overwrites the retained approval key when the encrypted runtime locks. */
+  public close(): void {
+    if (this.#closed) return;
+    this.#closed = true;
+    this.#secret.fill(0);
+    this.#consumedTokenDigests.clear();
+  }
+
+  #assertOpen(): void {
+    if (this.#closed) throw new ExportApprovalError("Export approval authority is closed");
   }
 }
 

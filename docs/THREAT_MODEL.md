@@ -10,7 +10,7 @@ This application concentrates high-sensitivity financial records and long-lived 
 
 The design materially reduces cloud and credential risk, but “local-first” is not the same as invulnerable. Malware or an administrator controlling the signed-in Windows session can observe decrypted data and can potentially alter the program. Likewise, data intentionally returned to ChatGPT is no longer confined to local storage. Those are residual risks that the UI and documentation must state plainly.
 
-This document describes required controls. A scaffold or demo build must not be assumed to implement them. Real provider tokens, statements, or account data are prohibited until the applicable launch gates are verified.
+This document describes the production control target. The local alpha implements many of these controls, but no test or demo build should be assumed to satisfy every launch gate. Begin with synthetic data; real provider tokens, statements, or account data require the owner to verify the applicable environment, parser, recovery, and remote-access controls.
 
 ## Scope
 
@@ -103,7 +103,7 @@ Tool name, target, filters, pagination cursor, and caller behavior are untrusted
 
 ### TB-6: Local MCP/tunnel-client to OpenAI-hosted tunnel and ChatGPT
 
-The official [Secure MCP Tunnel](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels) uses an outbound connection to reach a private MCP server without an inbound public listener. The tunnel still carries selected request and response data outside the computer. Organization/workspace association, tunnel permissions, runtime key handling, and the user's OpenAI data controls remain separate concerns.
+The workspace-supported Secure MCP Tunnel is intended to use an outbound connection to reach a private MCP server without an inbound public listener. The tunnel still carries selected request and response data outside the computer. Organization/workspace association, tunnel permissions, runtime key handling, and the user's OpenAI data controls remain separate concerns. OpenAI's current public [custom MCP app guidance](https://help.openai.com/en/articles/12584461-developer-mode-and-full-mcp-connectors-in-chatgpt-beta) does not by itself establish tunnel-client availability.
 
 ### TB-7: Export service to destination files and accounting importers
 
@@ -140,6 +140,7 @@ After explicit approval, sensitive files leave the encrypted application store. 
 ### MCP and tunnel hardening
 
 - Bind HTTP transport only to loopback or use stdio; reject non-loopback forwarded-host/origin patterns and defend against DNS rebinding/CSRF where HTTP is used.
+- Keep packaged production MCP disabled by default and require a Windows-protected bearer token for every enabled production listener, including loopback-only local use. Rate-limit failed authentication separately from authenticated traffic.
 - Register only the seven approved read tools and make the MCP process depend only on query interfaces.
 - Mark each tool read-only, but enforce the boundary with module capabilities, database read transactions, code review, and tests.
 - Bound dates, page sizes, response bytes, execution time, and concurrency; use opaque authenticated cursors.

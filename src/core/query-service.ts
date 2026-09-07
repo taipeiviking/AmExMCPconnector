@@ -22,13 +22,24 @@ import type {
   TransactionPage,
 } from "./domain";
 import { NotFoundError, ValidationError } from "./errors";
-import { buildPortfolioReport } from "./portfolio";
-import type { FinancialReadStore } from "./repository";
+import { PortfolioReportBuilder } from "./portfolio";
+import {
+  MAX_STORE_READ_PAGE_SIZE,
+  type FinancialReadStore,
+  type TransactionReadPosition,
+} from "./repository";
+
+const DEFAULT_PORTFOLIO_REPORT_PAGE_SIZE = 1_000;
+const DEFAULT_MAXIMUM_PORTFOLIO_REPORT_TRANSACTIONS = 250_000;
 
 export interface FinanceQueryServiceOptions {
   readonly authorizationChecker?: AuthorizationChecker;
   readonly auditSink?: AuditSink;
   readonly now?: () => Date;
+  /** Internal read batch size; it does not change the report result. */
+  readonly portfolioReportPageSize?: number;
+  /** Explicit work ceiling. Reports above it fail rather than returning partial totals. */
+  readonly maximumPortfolioReportTransactions?: number;
 }
 
 export interface ListAccountsInput {
@@ -51,12 +62,30 @@ export class FinanceQueryService {
   readonly #authorizationChecker: AuthorizationChecker;
   readonly #audit: AuditSink;
   readonly #now: () => Date;
+  readonly #portfolioReportPageSize: number;
+  readonly #maximumPortfolioReportTransactions: number;
 
   public constructor(store: FinancialReadStore, options: FinanceQueryServiceOptions = {}) {
     this.#store = store;
     this.#now = options.now ?? (() => new Date());
     this.#authorizationChecker = options.authorizationChecker ?? new StoredAuthorizationChecker(this.#now);
     this.#audit = options.auditSink ?? new NullAuditSink();
+    this.#portfolioReportPageSize = options.portfolioReportPageSize ?? DEFAULT_PORTFOLIO_REPORT_PAGE_SIZE;
+    this.#maximumPortfolioReportTransactions =
+      options.maximumPortfolioReportTransactions ?? DEFAULT_MAXIMUM_PORTFOLIO_REPORT_TRANSACTIONS;
+    if (
+      !Number.isSafeInteger(this.#portfolioReportPageSize) ||
+      this.#portfolioReportPageSize < 1 ||
+      this.#portfolioReportPageSize > MAX_STORE_READ_PAGE_SIZE
+    ) {
+      throw new RangeError(`portfolioReportPageSize must be an integer from 1 to ${MAX_STORE_READ_PAGE_SIZE}`);
+    }
+    if (
+      !Number.isSafeInteger(this.#maximumPortfolioReportTransactions) ||
+      this.#maximumPortfolioReportTransactions < 1
+    ) {
+      throw new RangeError("maximumPortfolioReportTransactions must be a positive integer");
+    }
   }
 
   public async listAccounts(input: ListAccountsInput): Promise<readonly AmexAccount[]> {
@@ -99,14 +128,26 @@ export class FinanceQueryService {
     }
     const accounts = await this.#resolveReadableTarget(input.target);
     const scope = cursorScope(input.target, input.from, input.to);
-    const offset = input.cursor === undefined ? 0 : decodeCursor(input.cursor, scope);
-    const transactions = [...(await this.#store.listTransactions({
-      accountIds: accounts.map((account) => account.id),
+    const after = input.cursor === undefined ? undefined : decodeCursor(input.cursor, scope);
+    const accountIds = accounts.map((account) => account.id);
+    const transactions = await this.#store.listTransactions({
+      accountIds,
       ...(input.from === undefined ? {} : { from: input.from }),
       ...(input.to === undefined ? {} : { to: input.to }),
-    }))].sort((left, right) => right.postedAt.localeCompare(left.postedAt) || left.id.localeCompare(right.id));
-    const page = transactions.slice(offset, offset + limit);
-    const nextOffset = offset + page.length;
+      ...(after === undefined ? {} : { after }),
+      limit: limit + 1,
+    });
+    assertBoundedOrderedTransactionPage(transactions, {
+      accountIds,
+      ...(input.from === undefined ? {} : { from: input.from }),
+      ...(input.to === undefined ? {} : { to: input.to }),
+      ...(after === undefined ? {} : { after }),
+      maximumRows: limit + 1,
+    });
+    const page = transactions.slice(0, limit);
+    const nextCursor = transactions.length > limit
+      ? encodeCursor(transactionPosition(page[page.length - 1]!), scope)
+      : null;
     await this.#auditSuccess(
       "list_transactions",
       accounts.map((account) => account.id),
@@ -115,7 +156,7 @@ export class FinanceQueryService {
     );
     return {
       transactions: page,
-      nextCursor: nextOffset < transactions.length ? encodeCursor(nextOffset, scope) : null,
+      nextCursor,
     };
   }
 
@@ -136,21 +177,45 @@ export class FinanceQueryService {
     const portfolio = await this.#getPortfolio(input.portfolioId);
     const accounts = await this.#accountsForPortfolio(portfolio.accountIds);
     await Promise.all(accounts.map((account) => this.#assertReadable(account)));
-    const transactions = await this.#store.listTransactions({
-      accountIds: accounts.map((account) => account.id),
-      ...(input.from === undefined ? {} : { from: input.from }),
-      ...(input.to === undefined ? {} : { to: input.to }),
-    });
-    const result = buildPortfolioReport({
+    const accountIds = accounts.map((account) => account.id);
+    const builder = new PortfolioReportBuilder({
       portfolio,
       accounts,
-      transactions,
       generatedAt: this.#now().toISOString(),
       ...(input.from === undefined ? {} : { periodStart: input.from }),
       ...(input.to === undefined ? {} : { periodEnd: input.to }),
     });
+    let after: TransactionReadPosition | undefined;
+    while (true) {
+      const remaining = this.#maximumPortfolioReportTransactions - builder.transactionCount;
+      const pageLimit = Math.min(this.#portfolioReportPageSize, remaining + 1);
+      const transactions = await this.#store.listTransactions({
+        accountIds,
+        ...(input.from === undefined ? {} : { from: input.from }),
+        ...(input.to === undefined ? {} : { to: input.to }),
+        ...(after === undefined ? {} : { after }),
+        limit: pageLimit,
+      });
+      assertBoundedOrderedTransactionPage(transactions, {
+        accountIds,
+        ...(input.from === undefined ? {} : { from: input.from }),
+        ...(input.to === undefined ? {} : { to: input.to }),
+        ...(after === undefined ? {} : { after }),
+        maximumRows: pageLimit,
+      });
+      if (transactions.length > remaining) {
+        throw new ValidationError(
+          "Portfolio report exceeds the local processing limit; narrow the from/to date range",
+          { maximumTransactions: this.#maximumPortfolioReportTransactions },
+        );
+      }
+      builder.addTransactions(transactions);
+      if (transactions.length < pageLimit) break;
+      after = transactionPosition(transactions[transactions.length - 1]!);
+    }
+    const result = builder.build();
     await this.#auditSuccess("get_portfolio_report", accounts.map((account) => account.id), portfolio.id, {
-      transactionCount: transactions.length,
+      transactionCount: builder.transactionCount,
     });
     return result;
   }
@@ -165,13 +230,14 @@ export class FinanceQueryService {
       throw new ValidationError("limit must be an integer from 1 to 500", { limit });
     }
     const accounts = await this.#resolveReadableTarget(input.target);
+    const accountIds = accounts.map((account) => account.id);
     const alerts = await this.#store.listFraudAlerts({
-      accountIds: accounts.map((account) => account.id),
+      accountIds,
       ...(input.status === undefined ? {} : { status: input.status }),
+      limit,
     });
-    const result = [...alerts]
-      .sort((left, right) => right.detectedAt.localeCompare(left.detectedAt) || left.id.localeCompare(right.id))
-      .slice(0, limit);
+    assertBoundedOrderedFraudAlertPage(alerts, accountIds, input.status, limit);
+    const result = [...alerts];
     await this.#auditSuccess(
       "list_fraud_alerts",
       accounts.map((account) => account.id),
@@ -288,28 +354,102 @@ function cursorScope(target: DataTarget, from: string | undefined, to: string | 
   return createHash("sha256").update(JSON.stringify({ target, from: from ?? null, to: to ?? null })).digest("hex");
 }
 
-function encodeCursor(offset: number, scope: string): string {
-  return Buffer.from(JSON.stringify({ version: 1, offset, scope }), "utf8").toString("base64url");
+function encodeCursor(after: TransactionReadPosition, scope: string): string {
+  return Buffer.from(JSON.stringify({ version: 2, after, scope }), "utf8").toString("base64url");
 }
 
-function decodeCursor(cursor: string, expectedScope: string): number {
+function decodeCursor(cursor: string, expectedScope: string): TransactionReadPosition {
   try {
     const parsed: unknown = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
     if (
       typeof parsed !== "object" ||
       parsed === null ||
       !("version" in parsed) ||
-      parsed.version !== 1 ||
-      !("offset" in parsed) ||
-      !Number.isInteger(parsed.offset) ||
-      (parsed.offset as number) < 0 ||
+      parsed.version !== 2 ||
+      !("after" in parsed) ||
+      typeof parsed.after !== "object" ||
+      parsed.after === null ||
+      !("postedAt" in parsed.after) ||
+      typeof parsed.after.postedAt !== "string" ||
+      !/^\d{4}-\d{2}-\d{2}$/u.test(parsed.after.postedAt) ||
+      !("id" in parsed.after) ||
+      typeof parsed.after.id !== "string" ||
+      parsed.after.id.length < 1 ||
+      parsed.after.id.length > 256 ||
       !("scope" in parsed) ||
       parsed.scope !== expectedScope
     ) {
       throw new Error("invalid cursor");
     }
-    return parsed.offset as number;
+    return { postedAt: parsed.after.postedAt, id: parsed.after.id };
   } catch {
     throw new ValidationError("cursor is invalid or belongs to a different query");
+  }
+}
+
+function transactionPosition(transaction: FinancialTransaction): TransactionReadPosition {
+  return { postedAt: transaction.postedAt, id: transaction.id };
+}
+
+function transactionIsAfterPosition(
+  transaction: FinancialTransaction,
+  position: TransactionReadPosition,
+): boolean {
+  return transaction.postedAt < position.postedAt ||
+    (transaction.postedAt === position.postedAt && transaction.id > position.id);
+}
+
+function assertBoundedOrderedTransactionPage(
+  transactions: readonly FinancialTransaction[],
+  expected: {
+    readonly accountIds: readonly string[];
+    readonly from?: string;
+    readonly to?: string;
+    readonly after?: TransactionReadPosition;
+    readonly maximumRows: number;
+  },
+): void {
+  if (transactions.length > expected.maximumRows) {
+    throw new ValidationError("Financial store returned more rows than the requested read limit");
+  }
+  const allowedAccountIds = new Set(expected.accountIds);
+  let previous = expected.after;
+  for (const transaction of transactions) {
+    if (
+      !allowedAccountIds.has(transaction.source.accountId) ||
+      (expected.from !== undefined && transaction.postedAt < expected.from) ||
+      (expected.to !== undefined && transaction.postedAt > expected.to)
+    ) {
+      throw new ValidationError("Financial store returned a transaction outside the requested scope");
+    }
+    if (previous !== undefined && !transactionIsAfterPosition(transaction, previous)) {
+      throw new ValidationError("Financial store returned transactions outside canonical keyset order");
+    }
+    previous = transactionPosition(transaction);
+  }
+}
+
+function assertBoundedOrderedFraudAlertPage(
+  alerts: readonly FraudAlert[],
+  accountIds: readonly string[],
+  status: FraudAlert["status"] | undefined,
+  maximumRows: number,
+): void {
+  if (alerts.length > maximumRows) {
+    throw new ValidationError("Financial store returned more alerts than the requested read limit");
+  }
+  const allowedAccountIds = new Set(accountIds);
+  let previous: FraudAlert | undefined;
+  for (const alert of alerts) {
+    if (!allowedAccountIds.has(alert.accountId) || (status !== undefined && alert.status !== status)) {
+      throw new ValidationError("Financial store returned a fraud alert outside the requested scope");
+    }
+    if (
+      previous !== undefined &&
+      !(alert.detectedAt < previous.detectedAt || (alert.detectedAt === previous.detectedAt && alert.id > previous.id))
+    ) {
+      throw new ValidationError("Financial store returned fraud alerts outside canonical order");
+    }
+    previous = alert;
   }
 }

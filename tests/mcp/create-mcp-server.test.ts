@@ -68,8 +68,10 @@ afterEach(async () => {
   await Promise.all(clients.splice(0).map((client) => client.close()));
 });
 
-async function connect(service: FinanceReadService) {
-  const server = createFinanceMcpServer(service);
+async function connect(service: FinanceReadService, maximumPageSize?: number) {
+  const server = createFinanceMcpServer(service, {
+    ...(maximumPageSize === undefined ? {} : { maximumPageSize })
+  });
   const client = new Client({ name: "test-client", version: "1.0.0" });
   clients.push(client);
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -135,6 +137,20 @@ describe("finance MCP server", () => {
       to: "2026-01-31",
       limit: 25
     });
+  });
+
+  it("allows configuration to narrow but never broaden the public page-size limit", async () => {
+    const service = createService();
+    const { client } = await connect(service, 10);
+
+    const invalid = await client.callTool({
+      name: "list_transactions",
+      arguments: { target: { kind: "account", account_id: "acct-us-personal" }, limit: 11 }
+    });
+
+    expect(invalid.isError).toBe(true);
+    expect(service.listTransactions).not.toHaveBeenCalled();
+    expect(() => createFinanceMcpServer(service, { maximumPageSize: 201 })).toThrow(/1 to 200/u);
   });
 
   it("allowlists transaction output fields and excludes internal lineage identifiers", async () => {

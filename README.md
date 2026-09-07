@@ -1,28 +1,30 @@
 # AmEx MCP Connector
 
-A Windows 11-focused, local-first desktop scaffold for owner-controlled American Express financial data. It runs from the system tray, keeps credentials and data on one Windows installation, and exposes only seven explicitly scoped, read-only MCP tools.
+A Windows 11-focused, local-first desktop application for owner-controlled American Express financial data. It runs from the system tray, keeps credentials and data on one Windows installation, and exposes only seven explicitly scoped, read-only MCP tools.
 
-> **Development status:** this is a security-oriented runnable skeleton, not production financial software and not affiliated with American Express. Use synthetic data only. The U.S. provider integration, production OAuth credential resolver, tray-supervised Secure MCP Tunnel lifecycle, draining/cancellation of in-flight reads and audit persistence during lock/delete, full Excel/PDF variants, durable/atomic export-package history and approval consumption, signed installer/update chain, and live-format accounting validation remain release gates.
+> **Development status:** this is a runnable local alpha, not production financial software and not affiliated with American Express. Start with the synthetic test drive. Japan CSV/XLSX/QIF/text-PDF import and all six reviewed accounting-file formats are wired end to end, but official statement layouts and accounting import behavior can change and must be verified before relying on real data. U.S. use requires an independently approved provider and configuration; this repository does not include provider access or direct/live Amex connectivity. Code signing, a reviewed update chain, broader real-format fixtures, operational recovery, and production security review remain release gates.
 
 ## What is implemented
 
-- Electron/TypeScript Windows tray app with a context-isolated, sandboxed dashboard for accounts, portfolios, imports, exports, sync/authorization status, alerts, audit, and private connection status.
+- Electron/TypeScript Windows tray app with a context-isolated, sandboxed dashboard for accounts, owner-editable portfolio membership, imports, exports, sync/authorization status, review-only alert dispositions, audit, and private connection status.
 - One connector with multiple separately authorized/import-only accounts; no global MCP enumeration and no implicit “current account.”
 - Exactly seven MCP tools: `list_accounts`, `get_account_status`, `list_transactions`, `get_statement`, `get_portfolio_report`, `list_fraud_alerts`, and `explain_alert`.
 - Mandatory `target` discriminator (`account` or `portfolio`) and authorization/readiness checks before financial reads.
-- Streamable HTTP bound only to `127.0.0.1`, with host/origin, body-size, page-size, and rate controls plus read-only MCP annotations. The bearer-reference resolver and complete request/response/concurrency limits remain release gates.
+- Streamable HTTP bound only to `127.0.0.1`, with host/origin, authentication, body-size, page-size, concurrency, timeout, and separate authenticated/failed-auth rate controls plus read-only MCP annotations. Packaged production keeps MCP disabled unless bearer authentication is explicitly configured.
 - A sql.js/SQLite image encrypted as one AES-256-GCM envelope; its random data key is wrapped by Electron `safeStorage` (Windows DPAPI) and embedded as opaque ciphertext. There is no plaintext fallback.
 - Typed financial domain, encrypted repository, durable redacted audit sink, exact decimal-string money model, reconciliation/category/portfolio/anomaly services, and explicit synthetic demo fixtures.
-- CSV and QIF normalization plus format adapter boundaries for official Japan CSV/Excel/QIF/PDF exports—never scraping or credential replay.
-- QuickBooks CSV/QBO/QFX and Money Forward statement/journal/ledger byte-generation seams with duplicate checks, digest-bound human approval, and process-lifetime replay rejection. Durable atomic materialization/history remains a release gate. No posting client exists.
-- Automated unit/contract/security tests, Windows CI, NSIS installer scaffolding, environment specification, threat model, and phased implementation plan.
+- Two-phase local Japan statement review and confirmed import for CSV, bounded `.xlsx`, QIF, and text-based PDF files. Before anything is committed, the UI shows every candidate row (up to 1,000), signed per-currency totals, duplicates, warnings, reconciliation, and the active category-mapping fingerprint, with explicit **Approve reviewed rows and import** and **Cancel preview** actions. Approval performs one atomic encrypted-store commit—never scraping or credential replay.
+- QuickBooks CSV/QBO/QFX and Money Forward statement/journal/ledger package creation with local duplicate history, an exact preview fingerprint, one-time human approval, atomic destination writes, manifests, and checksums. No posting client exists.
+- A normalized U.S. provider OAuth/read-only adapter with per-account encrypted token isolation and guarded HTTPS configuration. It remains disabled until the owner supplies an independently approved provider; it is not a built-in or direct Amex connection.
+- A fail-closed, tray-supervised Secure MCP Tunnel path for an already provisioned protected client profile. It starts only when the hash-pinned executable, loopback endpoint, and reviewed non-secret arguments validate; no raw credentials are accepted in arguments or the process environment. Local-only mode remains fully usable.
+- Automated unit/contract/security tests, Windows CI, unsigned NSIS installer packaging for local testing, environment specification, threat model, and phased implementation plan.
 
 ## Security boundary
 
 ```mermaid
 flowchart LR
   ChatGPT[ChatGPT developer-mode app] <-->|organization/workspace scoped| Tunnel[OpenAI-hosted tunnel endpoint]
-  Tunnel <-->|outbound HTTPS polling| Client[tunnel-client on this PC]
+  Tunnel <-.->|intended private route; verify externally| Client[vetted tunnel client on this PC]
   Client -->|127.0.0.1 only| MCP[Read-only MCP adapter]
   MCP --> Guard[Target + authorization guard]
   Guard --> DB[(Encrypted local SQLite image)]
@@ -39,7 +41,7 @@ flowchart LR
   MCP -. cannot call .-> Export
 ```
 
-ChatGPT cannot directly reach a local server. Private connected mode uses the official [OpenAI Secure MCP Tunnel](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels), an outbound-only path while the app and client run. The local MCP mode remains available with the tunnel disabled. The app must never be exposed through a public listener, public port forward, or generic public reverse proxy.
+ChatGPT cannot directly reach a local server. Private connected mode therefore requires a workspace-authorized Secure MCP Tunnel and a vetted client/profile supplied through an authoritative deployment channel. The public OpenAI material currently available describes [custom MCP apps and their workspace controls](https://help.openai.com/en/articles/12584461-developer-mode-and-full-mcp-connectors-in-chatgpt-beta), but does not establish a generally available tunnel client or stable Windows CLI contract; this repository deliberately does not guess one. Local MCP remains available with the tunnel disabled. Never substitute a public listener, public port forward, or generic public reverse proxy.
 
 Remote queries intentionally send the selected response to the chosen OpenAI product; “local-first storage” does not mean those selected results remain on the PC. Review workspace retention and data controls before connected use.
 
@@ -76,16 +78,17 @@ Never place a real secret, token, Amex credential, account identifier, statement
 | `npm run build` | Compile and copy renderer/WASM assets. |
 | `npm run verify` | Typecheck, run unit/contract tests, build, and smoke-test the Electron/IPC/MCP startup path. |
 | `npm run package:win` | Create an unsigned NSIS installer under `release/`. |
+| `npm run smoke:packaged` | Launch the unpacked production executable with isolated temporary data, verify encrypted startup with MCP safely disabled by default, and exercise its graceful shutdown path. Run after packaging. |
 
 Unsigned installers are for local testing only. Production distribution needs protected code signing, release provenance, malware scanning, and a reviewed update process.
 
 ## Collection and export policy
 
-- **U.S.:** only an approved consent-based read-only provider path may be implemented. Provider OAuth tokens are isolated per authorization. The app never asks for or stores an Amex password, one-time code, or security answer. The scaffold leaves the provider disabled.
-- **Japan:** first release accepts only official owner-selected CSV, Excel, QIF, and PDF exports after the concrete variant has fixture-backed validation. No browser automation or scraping.
-- **Portfolio:** selected personal/company accounts can be viewed together, but every transaction retains source account, legal entity, country, currency, class, and business purpose. A portfolio is an attributed view, not a merged ledger or synced object.
-- **Accounting:** QuickBooks Online and Money Forward integration ends at reviewed import-file generation; the scaffold UI does not yet materialize packages. Duplicate detection and exact approval checks precede byte generation. The app never posts or uploads automatically.
-- **Alerts:** anomaly/fraud signals are review aids, not fraud determinations. The app cannot block a card, control an account, or submit a dispute.
+- **U.S.:** the normalized adapter runs only with an owner-configured, independently approved consent-based read-only provider. Provider OAuth tokens are isolated per authorization. The app never asks for or stores an Amex password, one-time code, or security answer. No provider is bundled or endorsed, and configuration alone is not evidence of live Amex access.
+- **Japan:** the local pipeline accepts owner-selected CSV, `.xlsx`, QIF, and text-based PDF exports. Its first phase shows all candidate rows up to the 1,000-row review limit plus signed totals, duplicate/warning/reconciliation results, and mapping/source fingerprints; only the separate **Approve reviewed rows and import** action can commit. **Cancel preview** discards the pending preview. No browser automation, scraping, OCR, or encrypted-PDF bypass is included. Verify each official layout before relying on it.
+- **Portfolio:** in normal unlocked mode, the owner can rename the local portfolio and choose its member accounts with checkboxes. Selected personal/company accounts can be viewed together, but every transaction retains source account, legal entity, country, currency, class, and business purpose. A portfolio is an attributed view, not a merged ledger or synced object; removing membership does not delete an account or its data.
+- **Accounting:** QuickBooks Online and Money Forward integration ends at reviewed local import-file generation. Duplicate detection and an exact, one-time approval precede atomic package creation; each package includes checksums and a manifest. The app never posts or uploads automatically, and local duplicate history cannot see entries created elsewhere in the accounting system.
+- **Alerts:** an open anomaly/fraud signal can be marked **reviewed**, **dismissed**, or **flagged as suspicious** by the owner in the desktop UI. These are audited local review dispositions, not issuer fraud determinations or card/dispute actions. ChatGPT can read and explain alerts but cannot change their status.
 
 ## Documentation
 

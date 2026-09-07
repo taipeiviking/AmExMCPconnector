@@ -21,12 +21,15 @@ describe("statement imports", () => {
     expect(result.transactions.map((transaction) => transaction.amount)).toEqual(["-12.34", "5.00"]);
     expect(result.transactions[0]).toMatchObject({
       externalId: "ref-1",
-      categoryId: "Meals",
+      categoryId: null,
       merchantCountry: "GB",
       source: { accountId: account.id, legalEntityId: account.legalEntityId, country: "US" },
     });
     expect(result.transactions[1]?.merchantCountry).toBe("FR");
-    expect(result.issues).toMatchObject([{ severity: "error", code: "INVALID_CSV_ROW", row: 4 }]);
+    expect(result.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ severity: "warning", code: "IMPORTED_CATEGORY_IGNORED", row: 2 }),
+      expect.objectContaining({ severity: "error", code: "INVALID_CSV_ROW", row: 4 }),
+    ]));
   });
 
   it("parses Shift-JIS Japanese headers without scraping credentials", () => {
@@ -41,12 +44,14 @@ describe("statement imports", () => {
     const bytes = iconv.encode(csv, "shift_jis");
 
     const result = parseStatementCsv(bytes, { account, importedAt: NOW });
-    expect(result.issues).toEqual([]);
+    expect(result.issues).toEqual([
+      expect.objectContaining({ severity: "warning", code: "IMPORTED_BUSINESS_PURPOSE_IGNORED", row: 2 }),
+    ]);
     expect(result.transactions[0]).toMatchObject({
       postedAt: "2026-01-08",
       description: "サンプル店舗",
       amount: "-1200",
-      source: { businessPurpose: "出張費", country: "JP" },
+      source: { businessPurpose: account.businessPurpose, country: "JP" },
     });
   });
 
@@ -102,13 +107,15 @@ describe("statement imports", () => {
     ].join("\n");
     const result = parseQif(Buffer.from(qif, "utf8"), { account, importedAt: NOW });
 
-    expect(result.issues).toEqual([]);
+    expect(result.issues).toEqual([
+      expect.objectContaining({ severity: "warning", code: "IMPORTED_CATEGORY_IGNORED", row: 2 }),
+    ]);
     expect(result.transactions[0]).toMatchObject({
       postedAt: "2026-01-09",
       amount: "-45.67",
       description: "Example Merchant",
       externalId: "qif-ref",
-      categoryId: "Meals",
+      categoryId: null,
     });
   });
 });

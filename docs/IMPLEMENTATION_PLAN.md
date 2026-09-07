@@ -7,7 +7,7 @@ Target: Windows 11 x64, single local user
 
 Deliver a signed, installable Windows tray application that can safely manage multiple separately authorized U.S. and import-only Japan Amex personal/company accounts, maintain an encrypted and source-attributed local store, answer only the approved read-only MCP queries, and create human-approved accounting import packages without posting them.
 
-The plan is ordered by risk. Demo scaffolding may be runnable early, but production data remains prohibited until encryption, authorization isolation, parser safety, and remote-access gates pass.
+This is the historical risk-ordered delivery plan plus remaining production gates. The README is authoritative for current alpha behavior; production data remains prohibited until encryption, authorization isolation, parser safety, recovery, and remote-access gates are independently reviewed.
 
 ## Release scope
 
@@ -55,7 +55,7 @@ The plan is ordered by risk. Demo scaffolding may be runnable early, but product
 - Record decisions for the Electron security posture, encrypted database/key-vault mechanism, local transport, schema migrations, installer/signing, raw-file retention, FX source, and telemetry (default none).
 - Select and approve a U.S. aggregation provider only after verifying Amex U.S. personal/company coverage, account-level identifiers, statement/transaction fields, supported read-only scopes, OAuth/token behavior, rate limits, retention/deletion, sandbox, and contractual authority.
 - Obtain sanitized official Japan statement variants and published import specifications/samples for accounting targets. Never commit real customer files.
-- Verify current [Secure MCP Tunnel](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels) availability, organization/workspace permissions, network requirements, and tunnel-client release for the intended OpenAI context.
+- Verify current Secure MCP Tunnel availability, authoritative client instructions, organization/workspace permissions, and network requirements for the intended OpenAI context; the public [custom MCP app guidance](https://help.openai.com/en/articles/12584461-developer-mode-and-full-mcp-connectors-in-chatgpt-beta) does not by itself prove tunnel-client access.
 
 ### Exit evidence
 
@@ -70,7 +70,7 @@ The plan is ordered by risk. Demo scaffolding may be runnable early, but product
 ### Work
 
 - Create a Windows tray host with Open, Pause/Resume local services, Connected Mode, Status, and Exit actions.
-- Build a sandboxed renderer and narrow typed IPC bridge. Add placeholder views for Accounts, Portfolios, Imports, Exports, Sync, Alerts, and Audit.
+- Build a sandboxed renderer and narrow typed IPC bridge. Add the initial views for Accounts, Portfolios, Imports, Exports, Sync, Alerts, and Audit.
 - Define domain ports for storage, secret vault, provider, parser, FX, anomaly, exporter, audit, and MCP queries.
 - Implement a demo-only in-memory repository with synthetic, clearly labeled U.S./Japan personal/company data.
 - Register only the seven read-only MCP tools against the demo query service over stdio and optional loopback development transport.

@@ -9,7 +9,12 @@ import type {
 } from "./domain";
 import { ValidationError } from "./errors";
 import { FinanceQueryService, type FinanceQueryServiceOptions } from "./query-service";
-import type { FinancialReadStore, FraudAlertReadFilter, TransactionReadFilter } from "./repository";
+import {
+  MAX_STORE_READ_PAGE_SIZE,
+  type FinancialReadStore,
+  type FraudAlertReadFilter,
+  type TransactionReadFilter,
+} from "./repository";
 import {
   assertSnapshotContainsNoSecrets,
   validateAccount,
@@ -45,6 +50,8 @@ CREATE TABLE IF NOT EXISTS transactions (
 );
 CREATE INDEX IF NOT EXISTS idx_transactions_account_date
   ON transactions(account_id, posted_at DESC, id);
+CREATE INDEX IF NOT EXISTS idx_transactions_date_id_account
+  ON transactions(posted_at DESC, id ASC, account_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_account_import_fingerprint
   ON transactions(account_id, import_fingerprint);
 CREATE TABLE IF NOT EXISTS statements (
@@ -65,6 +72,10 @@ CREATE TABLE IF NOT EXISTS fraud_alerts (
 );
 CREATE INDEX IF NOT EXISTS idx_fraud_alerts_account_status_date
   ON fraud_alerts(account_id, status, detected_at DESC);
+CREATE INDEX IF NOT EXISTS idx_fraud_alerts_date_id_account
+  ON fraud_alerts(detected_at DESC, id ASC, account_id);
+CREATE INDEX IF NOT EXISTS idx_fraud_alerts_status_date_id_account
+  ON fraud_alerts(status, detected_at DESC, id ASC, account_id);
 CREATE TABLE IF NOT EXISTS audit_events (
   id TEXT PRIMARY KEY NOT NULL,
   occurred_at TEXT NOT NULL,
@@ -73,7 +84,17 @@ CREATE TABLE IF NOT EXISTS audit_events (
   payload_json TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_audit_events_date ON audit_events(occurred_at DESC);
-PRAGMA user_version = 1;
+PRAGMA user_version = 2;
+`;
+
+const FINANCIAL_SCHEMA_V2_MIGRATION_SQL = `
+CREATE INDEX IF NOT EXISTS idx_transactions_date_id_account
+  ON transactions(posted_at DESC, id ASC, account_id);
+CREATE INDEX IF NOT EXISTS idx_fraud_alerts_date_id_account
+  ON fraud_alerts(detected_at DESC, id ASC, account_id);
+CREATE INDEX IF NOT EXISTS idx_fraud_alerts_status_date_id_account
+  ON fraud_alerts(status, detected_at DESC, id ASC, account_id);
+PRAGMA user_version = 2;
 `;
 
 interface JsonRow extends SqlRow {
@@ -87,7 +108,12 @@ export class EncryptedSqlFinancialStore implements FinancialReadStore, AuditSink
   public async initialize(): Promise<void> {
     const row = this.database.query<SqlRow & { user_version: number }>("SELECT user_version FROM pragma_user_version")[0];
     const version = row?.user_version;
-    if (version === 1) return;
+    if (version === 2) return;
+    if (version === 1) {
+      this.database.exec(FINANCIAL_SCHEMA_V2_MIGRATION_SQL);
+      await this.database.save();
+      return;
+    }
     if (version !== 0) {
       throw new ValidationError("Encrypted financial database schema version is unsupported", { version });
     }
@@ -119,10 +145,11 @@ export class EncryptedSqlFinancialStore implements FinancialReadStore, AuditSink
   }
 
   public async listTransactions(filter: TransactionReadFilter): Promise<readonly FinancialTransaction[]> {
+    validateOptionalReadLimit(filter.limit);
     if (filter.accountIds.length === 0) return [];
     const placeholders = filter.accountIds.map(() => "?").join(",");
     const where = [`account_id IN (${placeholders})`];
-    const params: Array<string> = [...filter.accountIds];
+    const params: Array<string | number> = [...filter.accountIds];
     if (filter.from !== undefined) {
       where.push("posted_at >= ?");
       params.push(filter.from);
@@ -131,8 +158,14 @@ export class EncryptedSqlFinancialStore implements FinancialReadStore, AuditSink
       where.push("posted_at <= ?");
       params.push(filter.to);
     }
+    if (filter.after !== undefined) {
+      where.push("(posted_at < ? OR (posted_at = ? AND id > ?))");
+      params.push(filter.after.postedAt, filter.after.postedAt, filter.after.id);
+    }
+    const limitSql = filter.limit === undefined ? "" : " LIMIT ?";
+    if (filter.limit !== undefined) params.push(filter.limit);
     return this.#jsonRows<FinancialTransaction>(
-      `SELECT payload_json FROM transactions WHERE ${where.join(" AND ")} ORDER BY posted_at DESC, id`,
+      `SELECT payload_json FROM transactions WHERE ${where.join(" AND ")} ORDER BY posted_at DESC, id ASC${limitSql}`,
       "transaction",
       params,
     );
@@ -147,16 +180,19 @@ export class EncryptedSqlFinancialStore implements FinancialReadStore, AuditSink
   }
 
   public async listFraudAlerts(filter: FraudAlertReadFilter): Promise<readonly FraudAlert[]> {
+    validateOptionalReadLimit(filter.limit);
     if (filter.accountIds.length === 0) return [];
     const placeholders = filter.accountIds.map(() => "?").join(",");
     const where = [`account_id IN (${placeholders})`];
-    const params: Array<string> = [...filter.accountIds];
+    const params: Array<string | number> = [...filter.accountIds];
     if (filter.status !== undefined) {
       where.push("status = ?");
       params.push(filter.status);
     }
+    const limitSql = filter.limit === undefined ? "" : " LIMIT ?";
+    if (filter.limit !== undefined) params.push(filter.limit);
     return this.#jsonRows<FraudAlert>(
-      `SELECT payload_json FROM fraud_alerts WHERE ${where.join(" AND ")} ORDER BY detected_at DESC, id`,
+      `SELECT payload_json FROM fraud_alerts WHERE ${where.join(" AND ")} ORDER BY detected_at DESC, id ASC${limitSql}`,
       "fraud alert",
       params,
     );
@@ -498,5 +534,12 @@ function parseJsonRecord<T>(json: string, label: string): T {
     throw new ValidationError(`Stored ${label} record is invalid`, {
       cause: caught instanceof Error ? caught.message : "invalid JSON",
     });
+  }
+}
+
+function validateOptionalReadLimit(limit: number | undefined): void {
+  if (limit === undefined) return;
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_STORE_READ_PAGE_SIZE) {
+    throw new ValidationError(`Read limit must be an integer from 1 to ${MAX_STORE_READ_PAGE_SIZE}`, { limit });
   }
 }

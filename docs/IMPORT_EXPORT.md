@@ -1,9 +1,11 @@
 # Import and Export Specification
 
-Status: target first-release workflow
+Status: implemented local-alpha workflow plus production contract
 Scope: desktop UI only; no MCP import/export and no accounting posting
 
-The current scaffold validates and renders approved export bytes in memory. Durable approval consumption across restarts, atomic destination materialization, manifests/checksums, audit/history persistence, and the fully wired desktop workflow described below remain explicit 1.0 release gates.
+The current alpha wires the owner-selected desktop workflow end to end. Japan CSV, bounded `.xlsx`, QIF, and text-based PDF files are parsed locally and bound to a selected account. Import is deliberately two-phase: the first action builds a review screen with every candidate row (up to 1,000), signed per-currency totals, warnings, duplicate and reconciliation results, and mapping/source fingerprints; only a separate explicit approval can commit the still-matching preview. Six accounting formats can be previewed and created in an explicit destination with a fingerprint-bound one-time approval, duplicate history, atomic writes, manifests, and SHA-256 checksums: QuickBooks CSV/QBO/QFX and Money Forward statement/journal/ledger CSV. The app has no accounting posting or upload client.
+
+This is not certification of every official Amex layout or every current accounting import variant. The requirements below remain the production security and accuracy contract; real-format fixtures, target-product test imports, recovery testing, and release review must continue before production use.
 
 ## Core boundary
 
@@ -38,6 +40,15 @@ selected -> staged -> parsed -> validated -> awaiting_review -> committed
 - **Failed/rejected:** no staging row becomes a queryable transaction.
 
 No live data is updated during preview. A file modification, mapping change, account change, parser-version change, or validation-result change invalidates confirmation.
+
+### Current alpha two-phase review screen
+
+1. **Choose statement and build preview** reads the owner-selected file, validates its exact target account and format, and creates an expiring in-memory approval candidate. It does not commit transactions.
+2. The preview table shows every candidate normalized row—not a sample—with source row, date, description, signed amount/currency, category, and business purpose. The first-release screen accepts at most 1,000 candidate rows; a larger file fails with a request to split it into smaller reviewed periods rather than hiding rows.
+3. The same screen shows signed totals separately by currency, transaction count, exact duplicate count, the complete parser-warning list, reconciliation status/difference, local mapping match count, the category-rule file fingerprint when one is active, the source-file fingerprint, and the preview expiry time.
+4. **Cancel preview** discards the pending candidate and writes no ledger records. **Approve reviewed rows and import** is a separate action that rechecks the preview/account/mapping baseline and then performs one atomic encrypted-store commit. An expired or changed candidate must be previewed again.
+
+Only active Japan statement-import accounts selected in the owner’s current local portfolio are available as import targets. In normal unlocked mode, the owner can rename that portfolio and edit membership with account checkboxes under **Portfolio → Save portfolio selection**. Removing membership changes the view and future scoped workflows; it does not delete the account or its encrypted history.
 
 ## Secure file intake
 
@@ -114,6 +125,8 @@ Each adapter has a unique parser ID and semantic version. A layout/header/date/e
 
 ## Normalized field requirements
 
+This section describes the fuller 1.0 evidence model. The runnable alpha retains the source account/entity/country/class/currency, signed amount, dates, description, optional merchant country, statement/file fingerprint, import fingerprint, category/purpose result, and timestamps in its encrypted transaction model. It does not yet retain every source cell, pending/supersession lineage, or source-category text; never infer those fields from an alpha export.
+
 Every committed transaction must resolve or explicitly mark review state for:
 
 - local source `account_id`;
@@ -185,18 +198,20 @@ Exact duplicates are idempotent and reference the existing source fact. Possible
 
 ## Category, business-purpose, and FX derivation
 
-- Preserve source category separately from local classification.
-- Apply category rules in deterministic versioned precedence: exact owner override, account/entity rule, normalized merchant rule, broader pattern, fallback unclassified.
-- Show proposed rule changes before bulk reclassification and keep previous assignment lineage.
-- Account business-purpose defaults are suggestions. Each transaction stores whether the value was inherited/suggested, rule-assigned, owner-confirmed, or unreviewed.
-- Preserve original amount/currency as canonical. A converted amount is a derived record with base/quote, rate, rate date, source, retrieval time, precision, and rounding policy.
-- Never combine currencies into one total without explicit reporting currency. Missing/stale rates produce an incomplete result, not a zero or silently omitted amount.
+Current alpha behavior is intentionally narrow:
+
+- Statement/QIF category and business-purpose fields are untrusted source metadata and are ignored as owner classifications; the parser emits a warning when they appear.
+- An optional owner-authored version-1 mapping file applies deterministic priority rules during the import preview. The review table shows the resulting category/purpose for every row, and approval is bound to the file's SHA-256; changing it requires a new preview.
+- The account's owner-controlled business-purpose default may be inherited when no reviewed rule supplies a value.
+- Original amounts and currencies remain canonical. Reports group exact totals by currency and perform no implicit FX conversion in the current alpha.
+
+Versioned post-import reclassification, per-row owner overrides, source-category lineage, and provenance-backed FX conversion remain later release work and must not be inferred from the current UI.
 
 ## Review-only anomaly/fraud alerts
 
 After commit, deterministic/versioned analyzers may create review signals such as unusual amount relative to that account's history, new merchant, rapid repeats, foreign/cross-border indication, near duplicate, or reconciliation inconsistency.
 
-Alerts retain source account, transaction, model/rule version, evidence, comparison window, and reason codes. They do not change a transaction, block a card, contact Amex, or start a dispute. Owner review/dismissal happens only in the desktop UI and is audited. “No alert” is never presented as proof that activity is legitimate.
+Alerts retain source account, transaction, model/rule version, evidence, comparison window, and reason codes. They do not change a transaction, block a card, contact Amex, or start a dispute. For an open signal, the desktop UI lets the owner choose **Mark reviewed**, **Dismiss**, or **Flag as suspicious**. These are audited local review dispositions only: even “flagged as suspicious” is not an issuer fraud finding and triggers no external/card/dispute action. ChatGPT may list or explain the stored signal but cannot change its disposition. “No alert” is never presented as proof that activity is legitimate.
 
 ## Export principles
 

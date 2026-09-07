@@ -15,7 +15,11 @@ const output = [];
 
 const child = spawn(
   electronExecutable,
-  [`--remote-debugging-port=${debugPort}`, projectRoot],
+  [
+    `--remote-debugging-port=${debugPort}`,
+    `--user-data-dir=${join(dataDirectory, "electron-profile")}`,
+    projectRoot
+  ],
   {
     cwd: projectRoot,
     env: {
@@ -160,7 +164,7 @@ try {
     wizardResult.stepCount !== 5 ||
     wizardResult.pathCount !== 4 ||
     testDrive?.ok !== true ||
-    testDrive.testDrive?.checks?.length !== 4
+    testDrive.testDrive?.checks?.length !== 7
   ) {
     throw new Error(`unexpected rendered UI state: ${JSON.stringify({ accountResult, wizardResult, testDrive })}`);
   }
@@ -181,7 +185,7 @@ try {
     throw new Error(`unexpected health response: ${JSON.stringify(health)}`);
   }
 
-  process.stdout.write("Electron smoke test passed: encrypted first-run storage, trusted renderer IPC, five-step onboarding, dark Accounts cards, safe test drive, and loopback MCP are running.\n");
+  process.stdout.write("Electron smoke test passed: encrypted first-run storage, trusted renderer IPC, five-step onboarding, dark Accounts cards, seven-check safe test drive, and loopback MCP are running.\n");
 } catch (error) {
   const detail = output.slice(-30).join("");
   throw new Error(`${error instanceof Error ? error.message : String(error)}${detail ? `\nElectron output:\n${detail}` : ""}`);

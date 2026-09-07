@@ -64,23 +64,23 @@
             <article class="wizard-step" data-wizard-step="1">
               <p class="eyebrow">Welcome</p>
               <h2>Your Amex data stays encrypted on this Windows PC at rest.</h2>
-              <p class="lead">This guide helps you choose the right account path, understand what is available in this scaffold, and test the private local service without using real financial data. If you later enable connected ChatGPT access, only the results you request leave this PC for OpenAI processing.</p>
+              <p class="lead">This guide helps you choose the right account path and test the private local service. Japan statement imports and reviewed accounting-file exports run locally. If you enable a separately approved U.S. provider or connect ChatGPT, only the data required for that explicit action leaves this PC.</p>
               <div class="promise-grid">
                 <div><strong>Local and encrypted</strong><span>No shared ledger or cross-device sync.</span></div>
                 <div><strong>Read-only for ChatGPT</strong><span>No payments, transfers, card controls, disputes, imports, or exports through MCP.</span></div>
                 <div><strong>No Amex password</strong><span>U.S. access will use approved consent; Japan uses official statement files.</span></div>
               </div>
-              <p class="scaffold-note"><strong>Current build:</strong> a security-oriented runnable scaffold for synthetic testing. Live U.S. connectivity, Excel/PDF parsing, and app-managed tunnel startup are not implemented yet.</p>
+              <p class="current-build-note"><strong>Current build:</strong> Japan CSV, Excel, QIF, and text-based PDF imports are available with local preview and duplicate checks. U.S. consent appears only when an approved provider is configured; scanned/encrypted PDFs require a supported text export or OCR outside this app.</p>
             </article>
 
             <article class="wizard-step" data-wizard-step="2" hidden>
               <p class="eyebrow">Choose your account path</p>
               <h2>Which type are you setting up?</h2>
               <div class="path-grid" role="list">
-                <button class="path-card" data-account-path="US-personal"><span class="path-status future">Provider required</span><strong>U.S. personal card</strong><small>Future approved read-only consent flow. No Amex password is collected here.</small></button>
-                <button class="path-card" data-account-path="US-company"><span class="path-status future">Provider required</span><strong>U.S. company card</strong><small>Separate company/entity label and consent. Live provider setup is not in this scaffold.</small></button>
-                <button class="path-card" data-account-path="JP-personal"><span class="path-status current">Import-only setup</span><strong>Japan personal card</strong><small>Add a local label, then choose an official statement export. No website scraping.</small></button>
-                <button class="path-card" data-account-path="JP-company"><span class="path-status current">Import-only setup</span><strong>Japan company card</strong><small>Keeps the company/entity and business context attached to every transaction.</small></button>
+                <button class="path-card" data-account-path="US-personal"><span class="path-status future">Provider required</span><strong>U.S. personal card</strong><small>Approved read-only consent when configured. No Amex password is collected here.</small></button>
+                <button class="path-card" data-account-path="US-company"><span class="path-status future">Provider required</span><strong>U.S. company card</strong><small>Separate company/entity label and provider consent for each authorization.</small></button>
+                <button class="path-card" data-account-path="JP-personal"><span class="path-status current">Available</span><strong>Japan personal card</strong><small>Add a local label, then preview and import an official statement export. No website scraping.</small></button>
+                <button class="path-card" data-account-path="JP-company"><span class="path-status current">Available</span><strong>Japan company card</strong><small>Keeps the company/entity and business context attached to every transaction.</small></button>
               </div>
               <p id="path-guidance" class="selection-note">Select one path to see its setup method.</p>
             </article>
@@ -97,10 +97,17 @@
 
             <article class="wizard-step" data-wizard-step="4" hidden>
               <p class="eyebrow">Safe local test drive</p>
-              <h2>Check the app without real account data.</h2>
-              <p class="lead">This test checks encrypted storage, the loopback-only MCP service, the seven-tool read-only boundary, and a synthetic Japan CSV dry-run. The synthetic row is discarded.</p>
+              <h2>Test the complete local path without real account data.</h2>
+              <p class="lead">Start with the automatic safety check. Then use the synthetic statement to practice a real local import and approved file export. Nothing connects to Amex or an accounting service.</p>
               <button class="button primary" data-action="run-safe-test-drive">Run safe local test</button>
               <div id="test-drive-results" class="test-results empty-state">No test has run yet.</div>
+              <ol class="test-route">
+                <li><strong>Add a Japan test account</strong><span>Accounts → enter a nickname and owner → choose Japan personal or company.</span></li>
+                <li><strong>Import synthetic data</strong><span>Statement imports → Save a synthetic test CSV → Choose, preview, and import that saved file.</span></li>
+                <li><strong>Create a reviewed export</strong><span>Export packages → choose the test account and a format → inspect the fingerprint and duplicates → approve once → choose a folder.</span></li>
+                <li><strong>Inspect, then clean up</strong><span>Open the package and manifest locally. Disconnect the test account or use Settings to delete local financial data.</span></li>
+              </ol>
+              <div class="inline-actions test-route-actions"><button class="button secondary" type="button" data-section="accounts">Open accounts</button><button class="button secondary" type="button" data-section="imports">Open imports</button><button class="button secondary" type="button" data-section="exports">Open exports</button></div>
             </article>
 
             <article class="wizard-step" data-wizard-step="5" hidden>
@@ -112,7 +119,7 @@
               </div>
               <div class="offboarding-list">
                 <p><strong>Stop access:</strong> Lock the app or exit it; the local MCP endpoint stops.</p>
-                <p><strong>Revoke or disconnect:</strong> A future U.S. provider must be revoked through its official consent controls. Japan import-only accounts have no Amex credential to revoke.</p>
+                <p><strong>Revoke or disconnect:</strong> Revoke a configured U.S. provider through that provider's official consent controls, then disconnect the local account. Japan import-only accounts have no Amex credential to revoke.</p>
                 <p><strong>Delete:</strong> Settings → Delete local financial data inventories and removes only the encrypted database and app-marked folders after two confirmations. Onboarding preferences, external consent, tunnel profiles, and copies elsewhere remain.</p>
               </div>
             </article>
@@ -178,13 +185,20 @@
             <button id="add-account-button" class="button primary" type="button">Add account</button>
           </article>
           <div id="accounts-cards" class="accounts-grid empty-state">No accounts configured.</div>
-          <p class="guardrail">Japan setup creates an encrypted import-only account. U.S. setup remains unavailable until an approved read-only provider is implemented. This app never asks for an Amex password.</p>
+          <p class="guardrail">Japan setup creates an encrypted import-only account. U.S. setup launches only a configured, approved read-only provider. This app never asks for an Amex password.</p>
         </section>
 
         <section id="portfolio" class="page">
-          <div class="section-intro"><div><p class="eyebrow">Local consolidation</p><h2 id="portfolio-name">Portfolio</h2><p>Selected accounts can be reported together without losing transaction provenance or creating a shared ledger.</p></div></div>
+          <div class="section-intro"><div><p class="eyebrow">Local consolidation</p><h2 id="portfolio-name">Portfolio</h2><p>Choose the exact local accounts included in portfolio-scoped ChatGPT queries. Membership does not change account authorization or delete source data.</p></div></div>
+          <article class="portfolio-editor panel">
+            <label><span>Portfolio name</span><input id="portfolio-display-name" maxlength="80" autocomplete="off" /></label>
+            <p class="portfolio-target">ChatGPT tool target ID: <code id="portfolio-id">—</code></p>
+            <div><span class="field-label">Included accounts</span><div id="portfolio-membership" class="portfolio-membership empty-state">Loading accounts…</div></div>
+            <button id="save-portfolio" class="button primary" type="button">Save portfolio selection</button>
+            <p class="guardrail">Disconnected accounts cannot be selected. Removing an account changes future portfolio queries immediately but retains its separately encrypted history.</p>
+          </article>
           <div class="three-column">
-            <article class="panel"><p class="eyebrow">Base currency</p><h3 id="base-currency">—</h3><p>Converted totals always retain original amount, currency, rate, date, and rate source.</p></article>
+            <article class="panel"><p class="eyebrow">Display preference</p><h3 id="base-currency">—</h3><p>Current reports keep separate exact totals for each original currency. No implicit FX conversion is performed.</p></article>
             <article class="panel"><p class="eyebrow">Reconciliation</p><h3>Review required</h3><p>Statement totals and duplicate candidates must be resolved before export.</p></article>
             <article class="panel"><p class="eyebrow">Business metadata</p><h3>Source retained</h3><p>Legal entity, account class, and business purpose remain attached to every transaction.</p></article>
           </div>
@@ -192,32 +206,60 @@
 
         <section id="imports" class="page">
           <div class="section-intro">
-            <div><p class="eyebrow">Japan import path</p><h2>Official statement imports</h2><p>Select an official Amex CSV, Excel, QIF, or PDF export. The current chooser validates file/extension/size only; CSV/QIF parser foundations exist, while production Excel/PDF parsing, account targeting, reconciliation, preview, and commit remain release gates.</p></div>
-            <button class="button primary" data-action="import-jp-statement">Choose statement file</button>
+            <div><p class="eyebrow">Japan import path</p><h2>Official statement imports</h2><p>Select the exact Japan account, then choose an official CSV, Excel, QIF, or text-based PDF export. The app parses it locally, reports invalid and duplicate rows, and asks for confirmation before committing.</p></div>
           </div>
+          <article class="workflow-form">
+            <label><span>Target Japan account</span><select id="import-account"><option value="">Add a Japan account first</option></select></label>
+            <label><span>Statement period start (optional)</span><input id="import-period-start" type="date" /></label>
+            <label><span>Statement period end (optional)</span><input id="import-period-end" type="date" /></label>
+            <label><span>Opening balance (optional)</span><input id="import-opening-balance" inputmode="decimal" placeholder="Signed JPY amount" autocomplete="off" /></label>
+            <label><span>Closing balance (optional)</span><input id="import-closing-balance" inputmode="decimal" placeholder="Signed JPY amount" autocomplete="off" /></label>
+            <button id="import-button" class="button primary" type="button">Choose statement and build preview</button>
+            <button class="button secondary" type="button" data-action="save-synthetic-sample-statement">Save a synthetic test CSV</button>
+          </article>
+          <article id="import-preview" class="import-preview panel empty-state">Choose a statement to see every transaction row before approval.</article>
+          <div class="inline-actions">
+            <button id="cancel-import-button" class="button secondary" type="button" hidden>Cancel preview</button>
+            <button id="approve-import-button" class="button primary" type="button" hidden>Approve reviewed rows and import</button>
+          </div>
+          <div id="import-result" class="operation-result empty-state">No import has run yet.</div>
           <div class="workflow">
             <div><span>1</span><strong>Select target account</strong><p>Prevents accidental cross-account import.</p></div>
-            <div><span>2</span><strong>Validate and preview</strong><p>Target first-release flow; not wired end to end in this scaffold.</p></div>
-            <div><span>3</span><strong>Confirm locally</strong><p>No selected file is committed by the current chooser.</p></div>
+            <div><span>2</span><strong>Validate and preview</strong><p>Review dates, totals, warnings, and duplicate rows.</p></div>
+            <div><span>3</span><strong>Confirm locally</strong><p>One atomic encrypted-store commit; cancel creates no ledger records.</p></div>
           </div>
-          <article class="panel"><h3>Parser status</h3><ul class="check-list"><li>CSV and QIF normalization scaffold available</li><li>Excel and PDF adapter boundaries documented</li><li>UTF-8, Shift-JIS, and CP932 policy configured</li><li>No browser automation or credential capture</li></ul></article>
+          <article class="panel"><h3>Parser status</h3><ul class="check-list"><li>CSV, QIF, and bounded Excel workbook parsing</li><li>Text-based PDF parsing with explicit rejection of scans/encryption</li><li>UTF-8, Shift-JIS, and CP932 validation</li><li>No browser automation or credential capture</li></ul></article>
         </section>
 
         <section id="exports" class="page">
           <div class="section-intro">
             <div><p class="eyebrow">Files only</p><h2>Accounting export packages</h2><p>Create import-ready files after mapping, reconciliation, duplicate checks, and an exact human approval.</p></div>
-            <button class="button primary" data-action="prepare-export">Prepare export preview</button>
           </div>
+          <article class="export-form">
+            <label><span>Source account</span><select id="export-account"><option value="">Import transactions first</option></select></label>
+            <label><span>File format</span><select id="export-format"><option value="quickbooks_csv">QuickBooks CSV</option><option value="quickbooks_qbo">QuickBooks QBO</option><option value="quickbooks_qfx">QuickBooks QFX</option><option value="money_forward_statement_csv">Money Forward statement CSV</option><option value="money_forward_journal_csv">Money Forward journal CSV</option><option value="money_forward_ledger_csv">Money Forward ledger CSV</option></select></label>
+            <label data-export-field="quickbooks"><span>QuickBooks account name</span><input id="export-account-name" maxlength="80" placeholder="e.g. Corporate card" autocomplete="off" /></label>
+            <label data-export-field="quickbooks"><span>Local account reference</span><input id="export-account-reference" maxlength="22" placeholder="e.g. AMEX-CORP" autocomplete="off" /></label>
+            <label data-export-field="qbo"><span>Intuit bank ID (QBO only)</span><input id="export-bank-id" maxlength="12" placeholder="Reviewed numeric BID" inputmode="numeric" autocomplete="off" /></label>
+            <label data-export-field="money-forward"><span>Liability account</span><input id="export-liability" maxlength="80" value="未払金" autocomplete="off" /></label>
+            <label data-export-field="money-forward"><span>Expense account</span><input id="export-expense" maxlength="80" value="旅費交通費" autocomplete="off" /></label>
+            <label data-export-field="money-forward"><span>Department (optional)</span><input id="export-department" maxlength="80" autocomplete="off" /></label>
+            <label data-export-field="money-forward"><span>Tax category (optional)</span><input id="export-tax-category" maxlength="80" value="対象外" autocomplete="off" /></label>
+            <label data-export-field="money-forward"><span>Text encoding</span><select id="export-encoding"><option value="shift_jis">Shift-JIS / CP932</option><option value="utf8_bom">UTF-8 with BOM</option></select></label>
+            <button id="export-button" class="button primary" type="button">Preview and create files</button>
+          </article>
+          <div id="export-result" class="operation-result empty-state">No export has run yet.</div>
           <div class="two-column">
-            <article class="panel"><h3>QuickBooks Online</h3><p>CSV, QBO, and QFX transaction-import package seams. No API posting or unattended upload.</p><span class="tag">Mapped per account and entity</span></article>
-            <article class="panel"><h3>Money Forward Cloud Accounting</h3><p>Transaction statement and CSV journal/ledger package seams with UTF-8 or Shift-JIS output.</p><span class="tag">Human approval required</span></article>
+            <article class="panel"><h3>QuickBooks Online</h3><p>Creates CSV, QBO, or QFX transaction-import files locally. No API posting or unattended upload.</p><span class="tag">Mapped per account and entity</span></article>
+            <article class="panel"><h3>Money Forward Cloud Accounting</h3><p>Creates transaction-statement, journal, or ledger CSV files in UTF-8 with BOM or Shift-JIS/CP932.</p><span class="tag">Human approval required</span></article>
           </div>
-          <p class="guardrail">Approval is tied to one preview fingerprint and duplicate report. It cannot authorize later or changed data.</p>
+          <p class="guardrail">Approval is tied to one preview fingerprint and duplicate report. It cannot authorize later or changed data. Duplicate history is local to this app, so also review the destination accounting system before importing.</p>
         </section>
 
         <section id="alerts" class="page">
           <div class="section-intro"><div><p class="eyebrow">Review-only analytics</p><h2>Fraud and anomaly review</h2><p>Local rules highlight activity worth checking. They do not determine fraud, block cards, or submit disputes.</p></div></div>
           <div id="alerts-list" class="card-list empty-state">No alerts in this portfolio.</div>
+          <p class="guardrail">Review status is stored locally only. Marking an alert reviewed, dismissed, or suspicious does not contact Amex, block a card, or open a dispute.</p>
         </section>
 
         <section id="audit" class="page">
@@ -226,11 +268,13 @@
         </section>
 
         <section id="connection" class="page">
-          <div class="section-intro"><div><p class="eyebrow">Private transport</p><h2>ChatGPT connection</h2><p>The local server never listens on the LAN or public internet. The current scaffold requires the documented manual Secure MCP Tunnel client; tray-managed startup is not implemented.</p></div><button class="button secondary" data-action="open-tunnel-docs">Open official tunnel docs</button></div>
+          <div class="section-intro"><div><p class="eyebrow">Private transport</p><h2>ChatGPT connection</h2><p>The local server never listens on the LAN or public internet. Connected mode remains disabled unless your OpenAI organization supplies authoritative Secure MCP Tunnel access and a vetted client/profile; the tray app can then supervise that client and stops it when the encrypted runtime locks.</p></div><button class="button secondary" data-action="open-tunnel-docs">Open official custom MCP guidance</button></div>
+          <div class="inline-actions"><button id="tunnel-start" class="button primary" type="button">Start private connection</button><button id="tunnel-stop" class="button secondary" type="button">Stop private connection</button></div>
           <div class="connection-map" aria-label="Connection architecture">
-            <div><strong>ChatGPT</strong><span>Developer-mode app</span></div><b>↔</b><div><strong>OpenAI tunnel endpoint</strong><span>Organization/workspace scoped</span></div><b>↔</b><div><strong>tunnel-client</strong><span>Outbound HTTPS only</span></div><b>↔</b><div><strong>127.0.0.1 MCP</strong><span>Private financial store</span></div>
+            <div><strong>ChatGPT</strong><span>Developer-mode app</span></div><b>↔</b><div><strong>OpenAI tunnel endpoint</strong><span>Only when provisioned</span></div><b>↔</b><div><strong>Vetted tunnel client</strong><span>Route must be verified</span></div><b>↔</b><div><strong>127.0.0.1 MCP</strong><span>Private financial store</span></div>
           </div>
-          <article class="panel"><dl class="details"><div><dt>MCP endpoint</dt><dd id="mcp-endpoint">—</dd></div><div><dt>Tool boundary</dt><dd>7 read-only tools</dd></div><div><dt>Tunnel status</dt><dd id="connection-tunnel-status">—</dd></div><div><dt>Public listener</dt><dd>None</dd></div></dl></article>
+          <article class="panel"><dl class="details"><div><dt>MCP endpoint</dt><dd id="mcp-endpoint">—</dd></div><div><dt>Tool boundary</dt><dd>7 read-only tools</dd></div><div><dt>U.S. provider</dt><dd id="provider-status">—</dd></div><div><dt>Provider environment</dt><dd id="provider-environment">—</dd></div><div><dt>Tunnel status</dt><dd id="connection-tunnel-status">—</dd></div><div><dt>Public listener</dt><dd>None</dd></div></dl></article>
+          <p class="guardrail">Connected mode is optional and fail-closed. Start it only with an already provisioned protected client profile, a locally reachable loopback MCP URL, the expected executable checksum, and reviewed non-secret arguments. Raw credentials in arguments or the process environment are rejected. If any check fails, keep using local-only mode.</p>
         </section>
 
         <section id="settings" class="page">

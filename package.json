@@ -27,6 +27,7 @@
     "dev": "npm run build && electron .",
     "dev:demo": "npm run build && cross-env AMEX_DEMO_MODE=true electron .",
     "smoke:electron": "node scripts/electron-smoke.mjs",
+    "smoke:packaged": "node scripts/packaged-smoke.mjs",
     "package:win": "npm run build && electron-builder --win nsis",
     "verify": "npm run scan:secrets && npm run typecheck && npm test && npm run build && npm run smoke:electron"
   },

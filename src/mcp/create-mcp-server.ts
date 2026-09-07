@@ -144,7 +144,19 @@ const READ_ONLY_ANNOTATIONS: ToolAnnotations = {
   openWorldHint: false
 };
 
-export function createFinanceMcpServer(service: FinanceReadService): McpServer {
+export interface FinanceMcpServerOptions {
+  /** May narrow, but never broaden, the public 200-row tool contract. */
+  readonly maximumPageSize?: number;
+}
+
+export function createFinanceMcpServer(
+  service: FinanceReadService,
+  options: FinanceMcpServerOptions = {}
+): McpServer {
+  const maximumPageSize = options.maximumPageSize ?? 200;
+  if (!Number.isSafeInteger(maximumPageSize) || maximumPageSize < 1 || maximumPageSize > 200) {
+    throw new Error("The MCP maximum page size must be an integer from 1 to 200.");
+  }
   const server = new McpServer(
     {
       name: "amex-local-finance-connector",
@@ -207,7 +219,7 @@ export function createFinanceMcpServer(service: FinanceReadService): McpServer {
         from_date: date.optional(),
         to_date: date.optional(),
         cursor: z.string().max(512).optional(),
-        limit: z.number().int().min(1).max(200).default(50)
+        limit: z.number().int().min(1).max(maximumPageSize).default(Math.min(50, maximumPageSize))
       },
       annotations: READ_ONLY_ANNOTATIONS
     },
@@ -277,7 +289,7 @@ export function createFinanceMcpServer(service: FinanceReadService): McpServer {
       inputSchema: {
         target,
         status: z.enum(["open", "reviewed", "dismissed"]).optional(),
-        limit: z.number().int().min(1).max(200).default(50)
+        limit: z.number().int().min(1).max(maximumPageSize).default(Math.min(50, maximumPageSize))
       },
       annotations: READ_ONLY_ANNOTATIONS
     },

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   AuthorizationRequiredError,
@@ -104,6 +104,81 @@ describe("FinanceQueryService", () => {
         cursor: page.nextCursor ?? undefined,
       }),
     ).rejects.toBeInstanceOf(ValidationError);
+  });
+
+  it("uses bounded keyset pages in canonical date-and-id order", async () => {
+    const account = makeAccount();
+    const store = new InMemoryFinancialStore(makeSnapshot({
+      accounts: [account],
+      transactions: [
+        makeTransaction(account, { id: "txn-b", postedAt: "2026-01-03" }),
+        makeTransaction(account, { id: "txn-c", postedAt: "2026-01-02" }),
+        makeTransaction(account, { id: "txn-a", postedAt: "2026-01-03" }),
+      ],
+    }));
+    const list = vi.spyOn(store, "listTransactions");
+    const service = new FinanceQueryService(store);
+
+    const first = await service.listTransactions({
+      target: { kind: "account", accountId: account.id },
+      limit: 1,
+    });
+    const second = await service.listTransactions({
+      target: { kind: "account", accountId: account.id },
+      limit: 1,
+      cursor: first.nextCursor ?? undefined,
+    });
+
+    expect(first.transactions.map((transaction) => transaction.id)).toEqual(["txn-a"]);
+    expect(second.transactions.map((transaction) => transaction.id)).toEqual(["txn-b"]);
+    expect(list.mock.calls[0]?.[0]).toMatchObject({ limit: 2 });
+    expect(list.mock.calls[1]?.[0]).toMatchObject({
+      limit: 2,
+      after: { postedAt: "2026-01-03", id: "txn-a" },
+    });
+  });
+
+  it("builds exact portfolio totals from bounded pages", async () => {
+    const account = makeAccount();
+    const transactions = Array.from({ length: 5 }, (_, index) =>
+      makeTransaction(account, {
+        id: `txn-${index}`,
+        postedAt: `2026-01-${String(10 - index).padStart(2, "0")}`,
+        amount: "-1.00",
+      }),
+    );
+    const store = new InMemoryFinancialStore(makeSnapshot({ accounts: [account], transactions }));
+    const list = vi.spyOn(store, "listTransactions");
+    const service = new FinanceQueryService(store, {
+      portfolioReportPageSize: 2,
+      maximumPortfolioReportTransactions: 10,
+      now: () => new Date(NOW),
+    });
+
+    const report = await service.getPortfolioReport({ portfolioId: "portfolio-1" });
+
+    expect(report.totals).toEqual([
+      { currency: "USD", inflows: "0.00", outflows: "5.00", net: "-5.00", transactionCount: 5 },
+    ]);
+    expect(list.mock.calls).toHaveLength(3);
+    expect(list.mock.calls.every(([filter]) => filter.limit === 2)).toBe(true);
+  });
+
+  it("fails rather than silently truncating a portfolio report above its work ceiling", async () => {
+    const account = makeAccount();
+    const transactions = [
+      makeTransaction(account, { id: "txn-1", postedAt: "2026-01-03" }),
+      makeTransaction(account, { id: "txn-2", postedAt: "2026-01-02" }),
+      makeTransaction(account, { id: "txn-3", postedAt: "2026-01-01" }),
+    ];
+    const service = new FinanceQueryService(
+      new InMemoryFinancialStore(makeSnapshot({ accounts: [account], transactions })),
+      { portfolioReportPageSize: 2, maximumPortfolioReportTransactions: 2 },
+    );
+
+    await expect(service.getPortfolioReport({ portfolioId: "portfolio-1" })).rejects.toThrowError(
+      /narrow the from\/to date range/iu,
+    );
   });
 
   it("scopes statements and fraud alert explanations to the selected account", async () => {

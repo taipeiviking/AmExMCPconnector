@@ -3,8 +3,8 @@ import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import type { FinancialTransaction } from "../domain";
 import { DuplicateExportError, ExportApprovalError, ValidationError } from "../errors";
 import { canonicalCurrencyAmount } from "../money";
-import { assertIsoDate } from "../validation";
-import { detectExportDuplicates } from "./duplicates";
+import { assertIsoDate, assertIsoInstant } from "../validation";
+import { detectExportDuplicates, exportTransactionFingerprint } from "./duplicates";
 import type { ExportHistoryRecord, ExportMapping, ExportPlan } from "./types";
 
 export function planExport(input: {
@@ -14,6 +14,7 @@ export function planExport(input: {
   readonly createdAt: string;
 }): ExportPlan {
   if (input.transactions.length === 0) throw new ValidationError("At least one transaction is required for export");
+  assertIsoInstant(input.createdAt, "createdAt");
   validateMapping(input.mapping);
   for (const transaction of input.transactions) {
     assertIsoDate(transaction.postedAt, "transaction.postedAt");
@@ -39,6 +40,7 @@ export function planExport(input: {
     });
   }
   const requestDigest = computeExportRequestDigest({
+    createdAt: input.createdAt,
     mapping: input.mapping,
     eligibleTransactions: detection.eligible,
     duplicates: detection.duplicates,
@@ -55,11 +57,13 @@ export function planExport(input: {
 
 /** Canonical digest of every plan field that can affect generated package bytes or its duplicate report. */
 export function computeExportRequestDigest(
-  plan: Pick<ExportPlan, "mapping" | "eligibleTransactions" | "duplicates">,
+  plan: Pick<ExportPlan, "mapping" | "eligibleTransactions" | "duplicates"> &
+    Partial<Pick<ExportPlan, "createdAt">>,
 ): string {
   return createHash("sha256")
     .update(
       stableJson({
+        createdAt: plan.createdAt ?? "",
         mapping: plan.mapping,
         eligibleTransactions: plan.eligibleTransactions,
         duplicates: plan.duplicates,
@@ -70,12 +74,53 @@ export function computeExportRequestDigest(
 
 /** Revalidates a plan immediately before bytes are rendered. */
 export function assertExportPlanIntegrity(plan: ExportPlan): void {
+  assertExportPlanSemantics(plan);
   const actual = Buffer.from(computeExportRequestDigest(plan), "hex");
   const recorded = Buffer.from(plan.requestDigest, "hex");
   if (actual.length !== recorded.length || !timingSafeEqual(actual, recorded)) {
     throw new ExportApprovalError("Export plan contents changed after planning and require fresh human approval", {
       planId: plan.id,
     });
+  }
+}
+
+export function assertExportPlanSemantics(plan: ExportPlan): void {
+  if (plan.id.trim().length === 0 || plan.eligibleTransactions.length === 0) {
+    throw new ValidationError("Export plan requires an id and at least one eligible transaction");
+  }
+  assertIsoInstant(plan.createdAt, "plan.createdAt");
+  validateMapping(plan.mapping);
+  const eligibleFingerprints = new Set<string>();
+  for (const transaction of plan.eligibleTransactions) {
+    assertIsoDate(transaction.postedAt, "transaction.postedAt");
+    if (
+      transaction.source.accountId !== plan.mapping.accountId ||
+      transaction.source.legalEntityId !== plan.mapping.legalEntityId ||
+      transaction.currency !== plan.mapping.currency
+    ) {
+      throw new ValidationError("Export plan transaction does not match its account, entity, and currency mapping", {
+        transactionId: transaction.id,
+      });
+    }
+    const fingerprint = exportTransactionFingerprint(transaction);
+    if (eligibleFingerprints.has(fingerprint)) {
+      throw new ValidationError("Export plan contains a duplicate eligible transaction", { transactionId: transaction.id });
+    }
+    eligibleFingerprints.add(fingerprint);
+  }
+  for (const duplicate of plan.duplicates) {
+    if (
+      duplicate.transactionId.trim().length === 0 ||
+      !/^[a-f0-9]{64}$/u.test(duplicate.fingerprint) ||
+      (duplicate.reason !== "already_exported" && duplicate.reason !== "duplicate_in_selection")
+    ) {
+      throw new ValidationError("Export plan duplicate report is invalid");
+    }
+    if (duplicate.reason === "duplicate_in_selection" && !eligibleFingerprints.has(duplicate.fingerprint)) {
+      throw new ValidationError("In-selection duplicate does not identify an eligible original transaction", {
+        transactionId: duplicate.transactionId,
+      });
+    }
   }
 }
 

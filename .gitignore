@@ -79,6 +79,17 @@ tunnel-client*.yml
 /exports/
 /export-packages/
 /reconciliation/
+*.csv
+*.tsv
+*.xls
+*.xlsx
+*.xlsm
+*.qif
+*.qbo
+*.qfx
+*.ofx
+*.pdf
+!tests/fixtures/synthetic/**
 
 # Runtime logs and audit logs
 /logs/

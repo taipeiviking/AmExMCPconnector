@@ -3,6 +3,7 @@ import type {
   AlertSummaryView,
   AuditSummaryView,
   DesktopAction,
+  DesktopActionResult,
   DesktopRequest,
   LocalTestDriveResult,
   DesktopSnapshot
@@ -24,6 +25,8 @@ const titles: Record<string, string> = {
 let toastTimer: ReturnType<typeof setTimeout> | undefined;
 let wizardStep = 1;
 let selectedAccountPath = readLocalSetting("amex-onboarding-path");
+let latestSnapshot: DesktopSnapshot | undefined;
+let pendingImportPreviewId: string | undefined;
 
 document.querySelectorAll<HTMLButtonElement>("[data-section]").forEach((button) => {
   button.addEventListener("click", () => showSection(button.dataset.section ?? "overview"));
@@ -37,6 +40,15 @@ document.querySelectorAll<HTMLButtonElement>("[data-action]").forEach((button) =
 
 setupWizard();
 byId("add-account-button").addEventListener("click", () => void addAccount());
+byId("import-button").addEventListener("click", () => void importStatement());
+byId("approve-import-button").addEventListener("click", () => void approveImport());
+byId("cancel-import-button").addEventListener("click", () => void cancelImport());
+byId("export-button").addEventListener("click", () => void prepareExport());
+byId("save-portfolio").addEventListener("click", () => void savePortfolio());
+byId("export-format").addEventListener("change", updateExportFields);
+byId("tunnel-start").addEventListener("click", () => void performAction({ kind: "set-tunnel-running", running: true }));
+byId("tunnel-stop").addEventListener("click", () => void performAction({ kind: "set-tunnel-running", running: false }));
+updateExportFields();
 byId("restart-onboarding").addEventListener("click", () => {
   wizardStep = 1;
   showWizardStep();
@@ -57,6 +69,16 @@ async function performAction(request: DesktopRequest): Promise<void> {
     const result = await window.amexConnector.performAction(request);
     showToast(result.message);
     if (result.testDrive) renderTestDrive(result.testDrive);
+    if (result.importPreview) renderImportPreview(result.importPreview);
+    if (result.importSummary) renderImportSummary(result.importSummary);
+    if (result.exportSummary) renderExportSummary(result.exportSummary);
+    if (
+      typeof request !== "string" &&
+      request.kind === "cancel-jp-import" &&
+      result.ok
+    ) {
+      clearImportPreview("Preview canceled; no local records were changed.");
+    }
     if (result.ok) await refresh();
   } catch {
     showToast("The local desktop action could not be completed.");
@@ -72,6 +94,7 @@ async function refresh(): Promise<void> {
 }
 
 function render(snapshot: DesktopSnapshot): void {
+  latestSnapshot = snapshot;
   const environmentPill = byId("environment-pill");
   environmentPill.textContent = snapshot.demoMode ? "Synthetic demo data" : snapshot.environment;
   environmentPill.className = `pill ${snapshot.demoMode ? "warn" : "neutral"}`;
@@ -86,16 +109,30 @@ function render(snapshot: DesktopSnapshot): void {
   setText("storage-state", snapshot.storage.state);
   setText("storage-detail", snapshot.storage.protection);
   setText("tunnel-state", snapshot.tunnel.state.replaceAll("-", " "));
-  setText("portfolio-name", snapshot.portfolioId);
+  setText("portfolio-name", snapshot.portfolio.name);
+  setText("portfolio-id", snapshot.portfolio.id);
   setText("base-currency", snapshot.baseCurrency);
   setText("mcp-endpoint", snapshot.mcp.endpoint ?? "Disabled");
+  setText(
+    "provider-status",
+    snapshot.provider.configured ? `${snapshot.provider.adapter} · normalized read-only adapter` : "Not configured"
+  );
+  setText("provider-environment", snapshot.provider.configured ? snapshot.provider.environment : "Local-only");
   setText("connection-tunnel-status", snapshot.tunnel.state.replaceAll("-", " "));
   setText("footer-version", `Version ${snapshot.version} · ${new Date(snapshot.generatedAt).toLocaleString()}`);
+  updatePathGuidance();
 
   renderAccountOverview(snapshot.accounts);
   renderAccountCards(snapshot.accounts);
+  renderPortfolioConfiguration(snapshot);
   renderAlerts(snapshot.alerts);
   renderAudit(snapshot.audit);
+  renderOperationAccountChoices(snapshot.accounts);
+
+  const tunnelStart = byId("tunnel-start") as HTMLButtonElement;
+  const tunnelStop = byId("tunnel-stop") as HTMLButtonElement;
+  tunnelStart.disabled = !snapshot.tunnel.configured || snapshot.tunnel.state === "running" || snapshot.tunnel.state === "starting";
+  tunnelStop.disabled = snapshot.tunnel.state !== "running" && snapshot.tunnel.state !== "starting";
 
   if (snapshot.notices.length) showToast(snapshot.notices[0]!);
 }
@@ -152,7 +189,8 @@ function renderAccountCards(accounts: AccountSummaryView[]): void {
       element("span", undefined, account.country === "JP" ? "Japan" : "United States"),
       element("span", undefined, account.accountClass),
       element("span", undefined, account.connectionType === "read_only_consent" ? "Read-only consent" : "Official statement import"),
-      element("span", "secure-tag", "Local · encrypted")
+      element("span", "secure-tag", "Local · encrypted"),
+      element("span", account.inPortfolio ? "portfolio-tag" : "muted-tag", account.inPortfolio ? "In portfolio" : "Outside portfolio")
     );
 
     const labelRow = element("div", "label-control");
@@ -179,11 +217,23 @@ function renderAccountCards(accounts: AccountSummaryView[]): void {
     const reconnect = element(
       "button",
       "button secondary",
-      account.connectionType === "read_only_consent" ? "Reconnect" : "Choose statement"
+      !account.active
+        ? "Disconnected"
+        : account.connectionType === "read_only_consent"
+          ? "Reconnect"
+          : "Choose statement"
     );
     reconnect.type = "button";
+    reconnect.disabled = !account.active;
+    if (!account.active) {
+      reconnect.title = "Add a new separately identified account entry to connect again without mixing source history.";
+    }
     reconnect.addEventListener("click", () =>
-      void performAction(account.connectionType === "read_only_consent" ? "authorize-us-account" : "import-jp-statement")
+      void performAction(
+        account.connectionType === "read_only_consent"
+          ? { kind: "authorize-us-account", accountId: account.id }
+          : { kind: "import-jp-statement", accountId: account.id }
+      )
     );
     const disconnect = element("button", "button danger-outline", "Disconnect");
     disconnect.type = "button";
@@ -192,8 +242,58 @@ function renderAccountCards(accounts: AccountSummaryView[]): void {
       void performAction({ kind: "disconnect-account", accountId: account.id })
     );
     actions.append(reconnect, disconnect);
+    if (!account.active) {
+      actions.append(
+        element(
+          "small",
+          "disconnected-guidance",
+          "To connect again, add a new account entry so retained history cannot be merged with a different source account."
+        )
+      );
+    }
     card.append(header, tags, labelRow, details, actions);
     container.append(card);
+  }
+}
+
+async function savePortfolio(): Promise<void> {
+  const name = inputValue("portfolio-display-name");
+  const accountIds = [...document.querySelectorAll<HTMLInputElement>("#portfolio-membership input[type='checkbox']:checked")]
+    .map((input) => input.value);
+  if (!name) {
+    showToast("Enter a portfolio name before saving its account selection.");
+    return;
+  }
+  await performAction({ kind: "update-portfolio", name, accountIds });
+}
+
+function renderPortfolioConfiguration(snapshot: DesktopSnapshot): void {
+  const name = byId("portfolio-display-name") as HTMLInputElement;
+  if (document.activeElement !== name) name.value = snapshot.portfolio.name;
+  name.disabled = !snapshot.portfolio.editable;
+  const save = byId("save-portfolio") as HTMLButtonElement;
+  save.disabled = !snapshot.portfolio.editable;
+  const container = byId("portfolio-membership");
+  container.replaceChildren();
+  container.classList.toggle("empty-state", snapshot.accounts.length === 0);
+  if (snapshot.accounts.length === 0) {
+    container.textContent = "Add an account first. New accounts are selected automatically.";
+    return;
+  }
+  for (const account of snapshot.accounts) {
+    const row = element("label", "portfolio-account-option");
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.value = account.id;
+    checkbox.checked = snapshot.portfolio.accountIds.includes(account.id);
+    checkbox.disabled = !snapshot.portfolio.editable || !account.active;
+    const detail = element("span");
+    detail.append(
+      element("strong", undefined, account.name),
+      element("small", undefined, `${account.country} · ${account.accountClass} · ${account.legalEntity}${account.active ? "" : " · disconnected"}`),
+    );
+    row.append(checkbox, detail);
+    container.append(row);
   }
 }
 
@@ -230,6 +330,223 @@ async function addAccount(): Promise<void> {
   });
 }
 
+async function importStatement(): Promise<void> {
+  const accountId = (byId("import-account") as HTMLSelectElement).value;
+  if (!accountId) {
+    showToast("Add and select a Japan account before choosing a statement.");
+    return;
+  }
+  const periodStart = inputValue("import-period-start");
+  const periodEnd = inputValue("import-period-end");
+  const openingBalance = inputValue("import-opening-balance");
+  const closingBalance = inputValue("import-closing-balance");
+  const reconciliationValues = [periodStart, periodEnd, openingBalance, closingBalance];
+  if (reconciliationValues.some(Boolean) && !reconciliationValues.every(Boolean)) {
+    showToast("For reconciliation, enter both period dates and both signed balances—or leave all four blank.");
+    return;
+  }
+  await performAction({
+    kind: "import-jp-statement",
+    accountId,
+    ...(periodStart ? { periodStart } : {}),
+    ...(periodEnd ? { periodEnd } : {}),
+    ...(openingBalance ? { openingBalance } : {}),
+    ...(closingBalance ? { closingBalance } : {})
+  });
+}
+
+async function approveImport(): Promise<void> {
+  if (pendingImportPreviewId === undefined) {
+    showToast("Choose and review a statement before approving it.");
+    return;
+  }
+  await performAction({ kind: "approve-jp-import", previewId: pendingImportPreviewId });
+}
+
+async function cancelImport(): Promise<void> {
+  if (pendingImportPreviewId === undefined) return;
+  await performAction({ kind: "cancel-jp-import", previewId: pendingImportPreviewId });
+}
+
+async function prepareExport(): Promise<void> {
+  const accountId = (byId("export-account") as HTMLSelectElement).value;
+  const account = latestSnapshot?.accounts.find((candidate) => candidate.id === accountId);
+  if (!account) {
+    showToast("Select an account with imported or synchronized transactions.");
+    return;
+  }
+  const format = (byId("export-format") as HTMLSelectElement).value as Extract<DesktopRequest, { kind: "prepare-export" }>["format"];
+  const accountName = inputValue("export-account-name") || account.name;
+  const accountReference = inputValue("export-account-reference");
+  const bankId = inputValue("export-bank-id");
+  const liabilityAccount = inputValue("export-liability");
+  const expenseAccount = inputValue("export-expense");
+  const department = inputValue("export-department");
+  const taxCategory = inputValue("export-tax-category");
+  const encoding = (byId("export-encoding") as HTMLSelectElement).value as "utf8_bom" | "shift_jis";
+  await performAction({
+    kind: "prepare-export",
+    accountId,
+    format,
+    accountName,
+    ...(accountReference ? { accountReference } : {}),
+    ...(bankId ? { bankId } : {}),
+    ...(liabilityAccount ? { liabilityAccount } : {}),
+    ...(expenseAccount ? { expenseAccount } : {}),
+    ...(department ? { department } : {}),
+    ...(taxCategory ? { taxCategory } : {}),
+    ...(format.startsWith("money_forward_") ? { encoding } : {})
+  });
+}
+
+function renderOperationAccountChoices(accounts: AccountSummaryView[]): void {
+  replaceAccountOptions(
+    byId("import-account") as HTMLSelectElement,
+    accounts.filter((account) => account.active && account.country === "JP" && account.connectionType === "official_statement_import"),
+    "Add a Japan account first"
+  );
+  replaceAccountOptions(
+    byId("export-account") as HTMLSelectElement,
+    accounts.filter((account) => account.active && account.queryReady),
+    "Import or synchronize transactions first"
+  );
+}
+
+function replaceAccountOptions(select: HTMLSelectElement, accounts: AccountSummaryView[], emptyLabel: string): void {
+  const selected = select.value;
+  select.replaceChildren();
+  if (accounts.length === 0) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = emptyLabel;
+    select.append(option);
+    select.disabled = true;
+    return;
+  }
+  select.disabled = false;
+  for (const account of accounts) {
+    const option = document.createElement("option");
+    option.value = account.id;
+    option.textContent = `${account.name} · ${account.country} · ${account.accountClass}`;
+    select.append(option);
+  }
+  if (accounts.some((account) => account.id === selected)) select.value = selected;
+}
+
+function updateExportFields(): void {
+  const format = (byId("export-format") as HTMLSelectElement).value;
+  const quickBooks = format.startsWith("quickbooks_");
+  const qbo = format === "quickbooks_qbo";
+  document.querySelectorAll<HTMLElement>("[data-export-field='quickbooks']").forEach((field) => { field.hidden = !quickBooks; });
+  document.querySelectorAll<HTMLElement>("[data-export-field='qbo']").forEach((field) => { field.hidden = !qbo; });
+  document.querySelectorAll<HTMLElement>("[data-export-field='money-forward']").forEach((field) => { field.hidden = quickBooks; });
+}
+
+function renderImportSummary(summary: NonNullable<Awaited<ReturnType<Window["amexConnector"]["performAction"]>>["importSummary"]>): void {
+  pendingImportPreviewId = undefined;
+  setImportApprovalButtons(false);
+  const result = byId("import-result");
+  result.classList.remove("empty-state");
+  result.textContent = `${summary.fileName}: imported ${summary.imported} of ${summary.parsed} parsed transactions into the selected encrypted account; skipped ${summary.duplicatesSkipped} duplicate(s); ${summary.warnings} warning(s).`;
+}
+
+function renderImportPreview(preview: NonNullable<DesktopActionResult["importPreview"]>): void {
+  pendingImportPreviewId = preview.previewId;
+  const container = byId("import-preview");
+  container.replaceChildren();
+  container.classList.remove("empty-state");
+
+  const summary = element("div", "import-preview-summary");
+  summary.append(
+    detailPair("File", preview.fileName),
+    detailPair("Format", `${preview.format.toUpperCase()}${preview.encoding ? ` · ${preview.encoding}` : ""}`),
+    detailPair("Rows to review", String(preview.rows.length)),
+    detailPair("Signed total", preview.totals.map((total) => `${total.signedTotal} ${total.currency}`).join(" · ") || "—"),
+    detailPair("Duplicates", String(preview.duplicateCount)),
+    detailPair("Reconciliation", `${preview.reconciliationStatus.replaceAll("_", " ")}${preview.reconciliationDifference ? ` · difference ${preview.reconciliationDifference}` : ""}`),
+    detailPair("Local mappings", `${preview.mappingMatchedCount} matched${preview.mappingFingerprint ? ` · ${preview.mappingFingerprint.slice(0, 12)}…` : ""}`),
+    detailPair("Source fingerprint", preview.sourceFingerprint),
+  );
+
+  const tableWrap = element("div", "import-preview-table-wrap");
+  const table = document.createElement("table");
+  const head = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  for (const label of ["Source row", "Date", "Description", "Signed amount", "Category", "Business purpose"]) {
+    const heading = document.createElement("th");
+    heading.textContent = label;
+    headRow.append(heading);
+  }
+  head.append(headRow);
+  const body = document.createElement("tbody");
+  for (const row of preview.rows) {
+    const tableRow = document.createElement("tr");
+    tableRow.append(
+      cell(String(row.sourceRow)),
+      cell(row.postedAt),
+      cell(row.description),
+      cell(`${row.amount} ${row.currency}`),
+      cell(row.categoryId ?? "Unassigned"),
+      cell(row.businessPurpose ?? "Unassigned"),
+    );
+    body.append(tableRow);
+  }
+  table.append(head, body);
+  tableWrap.append(table);
+
+  const warningBox = element("div", preview.warningCount > 0 ? "import-warnings" : "import-warnings clear");
+  warningBox.append(element("strong", undefined, `${preview.warningCount} warning${preview.warningCount === 1 ? "" : "s"}`));
+  if (preview.warnings.length === 0) warningBox.append(element("p", undefined, "No parser warnings."));
+  else {
+    const list = document.createElement("ul");
+    for (const warning of preview.warnings) list.append(element("li", undefined, warning));
+    warningBox.append(list);
+  }
+  const approvalNotice = element(
+    "p",
+    "guardrail",
+    `Review every row above, especially the sign of each amount, before approving. This preview expires at ${new Date(preview.expiresAt).toLocaleTimeString()}; changing the file, account data, or category mapping invalidates it.`,
+  );
+  container.append(summary, tableWrap, warningBox, approvalNotice);
+  setImportApprovalButtons(true);
+}
+
+function clearImportPreview(message: string): void {
+  pendingImportPreviewId = undefined;
+  const container = byId("import-preview");
+  container.replaceChildren();
+  container.classList.add("empty-state");
+  container.textContent = message;
+  setImportApprovalButtons(false);
+}
+
+function setImportApprovalButtons(visible: boolean): void {
+  const approve = byId("approve-import-button") as HTMLButtonElement;
+  const cancel = byId("cancel-import-button") as HTMLButtonElement;
+  approve.hidden = !visible;
+  cancel.hidden = !visible;
+}
+
+function renderExportSummary(summary: NonNullable<Awaited<ReturnType<Window["amexConnector"]["performAction"]>>["exportSummary"]>): void {
+  const result = byId("export-result");
+  result.classList.remove("empty-state");
+  const formatNames: Record<string, string> = {
+    quickbooks_csv: "QuickBooks CSV",
+    quickbooks_qbo: "QuickBooks QBO",
+    quickbooks_qfx: "QuickBooks QFX",
+    money_forward_statement_csv: "Money Forward statement CSV",
+    money_forward_journal_csv: "Money Forward journal CSV",
+    money_forward_ledger_csv: "Money Forward ledger CSV"
+  };
+  result.textContent = summary.warning
+    ? `FILES WERE CREATED at ${summary.destinationDirectory}, but local completion evidence needs attention: ${summary.warning} Do not recreate this package. Nothing was uploaded.`
+    : `Created and checksum-verified ${summary.files.length} local ${formatNames[summary.format] ?? summary.format} data file(s) plus a manifest for ${summary.exported} transactions at ${summary.destinationDirectory}; skipped ${summary.duplicatesSkipped} duplicate(s). Nothing was uploaded.`;
+}
+
+function inputValue(id: string): string {
+  return (byId(id) as HTMLInputElement).value.trim();
+}
+
 function setupWizard(): void {
   document.querySelectorAll<HTMLButtonElement>("[data-account-path]").forEach((button) => {
     if (button.dataset.accountPath === selectedAccountPath) button.classList.add("selected");
@@ -239,13 +556,7 @@ function setupWizard(): void {
       document.querySelectorAll("[data-account-path]").forEach((candidate) =>
         candidate.classList.toggle("selected", candidate === button)
       );
-      const isUs = selectedAccountPath.startsWith("US-");
-      setText(
-        "path-guidance",
-        isUs
-          ? "Current status: no live U.S. provider is configured. A future approved consent flow will open the provider's page and will never collect your Amex password in this app."
-          : "Current status: you can create a local Japan import-only account. The chooser accepts official CSV/Excel/QIF/PDF files for preview selection; only CSV/QIF parser foundations exist in this scaffold, and nothing is committed yet."
-      );
+      updatePathGuidance();
     });
   });
   byId("wizard-back").addEventListener("click", () => {
@@ -267,6 +578,26 @@ function setupWizard(): void {
     showToast("Getting started is complete. You can reopen it from the sidebar or Settings.");
   });
   showWizardStep();
+}
+
+function updatePathGuidance(): void {
+  if (!selectedAccountPath) {
+    setText("path-guidance", "Select one path to see its setup method.");
+    return;
+  }
+  if (!selectedAccountPath.startsWith("US-")) {
+    setText(
+      "path-guidance",
+      "Available now: create a local Japan import-only account, then preview and import an official CSV, XLSX, QIF, or text-based PDF statement. Scanned or encrypted PDFs are rejected, and the app never scrapes a website or asks for an Amex password."
+    );
+    return;
+  }
+  setText(
+    "path-guidance",
+    latestSnapshot?.provider.configured
+      ? `Configured: ${latestSnapshot.provider.adapter} (${latestSnapshot.provider.environment}) supplies a normalized, read-only consent flow. Verify that this is your approved provider before continuing; this is not direct Amex connectivity, and the app never collects your Amex password.`
+      : "Not configured: U.S. accounts require your own approved read-only aggregation provider and OAuth settings. You may create the local label, but authorization and synchronization remain unavailable until that configuration is complete. This app does not provide direct Amex connectivity or collect your Amex password."
+  );
 }
 
 function showWizardStep(): void {
@@ -328,6 +659,22 @@ function renderAlerts(alerts: AlertSummaryView[]): void {
     details.append(element("strong", undefined, alert.title));
     details.append(element("p", undefined, alert.explanation));
     const meta = element("small", undefined, `${alert.accountId} · ${new Date(alert.detectedAt).toLocaleString()} · ${alert.severity}`);
+    const actions = element("div", "alert-actions");
+    if (alert.status === "open") {
+      for (const [status, label] of [
+        ["reviewed", "Mark reviewed"],
+        ["dismissed", "Dismiss"],
+        ["confirmed_suspicious", "Flag as suspicious"],
+      ] as const) {
+        const button = element("button", status === "confirmed_suspicious" ? "button danger-outline" : "button quiet", label);
+        button.type = "button";
+        button.addEventListener("click", () => void performAction({ kind: "set-alert-status", alertId: alert.id, status }));
+        actions.append(button);
+      }
+    } else {
+      actions.append(element("span", "tag", `Owner status: ${alert.status.replaceAll("_", " ")}`));
+    }
+    details.append(actions);
     card.append(icon, details, meta);
     container.append(card);
   }

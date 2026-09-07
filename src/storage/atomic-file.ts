@@ -65,7 +65,10 @@ export async function writeFileAtomically(
       await unlink(temporaryPath);
     } else {
       // Node/libuv maps this to an atomic same-volume replacement on Windows.
-      await rename(temporaryPath, filePath);
+      // Virus scanners and indexers can hold a newly-created destination for a
+      // short time on Windows. Retry only the narrow transient error set while
+      // keeping the same verified temporary file and same-volume destination.
+      await renameWithWindowsTransientRetry(temporaryPath, filePath);
     }
 
     await chmod(filePath, 0o600).catch((error: unknown) => {
@@ -99,6 +102,23 @@ export async function writeFileAtomically(
         // The original error, if any, is more useful than cleanup failure.
       }
     });
+  }
+}
+
+async function renameWithWindowsTransientRetry(sourcePath: string, destinationPath: string): Promise<void> {
+  const maximumAttempts = process.platform === "win32" ? 12 : 1;
+  for (let attempt = 0; attempt < maximumAttempts; attempt += 1) {
+    try {
+      await rename(sourcePath, destinationPath);
+      return;
+    } catch (error) {
+      const retryable =
+        process.platform === "win32" &&
+        ["EACCES", "EBUSY", "ENOTEMPTY", "EPERM"].some((code) => hasErrorCode(error, code));
+      if (!retryable || attempt === maximumAttempts - 1) throw error;
+      const delayMs = Math.min(25 * 2 ** attempt, 250);
+      await new Promise<void>((resolveDelay) => setTimeout(resolveDelay, delayMs));
+    }
   }
 }
 
