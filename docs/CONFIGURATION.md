@@ -85,35 +85,38 @@ Connected mode accepts only a reviewed outbound client command supplied for the 
 
 ## U.S. aggregation variables
 
-These variables describe the current normalized, provider-agnostic adapter. They are **not** a drop-in Plaid configuration: Plaid Hosted Link does not use this adapter's generic authorization/token endpoints or `normalized_v1` response paths, and Plaid Statements does not support credit-card accounts. Do not set Plaid API URLs here and infer that the U.S. path is ready. The proposed provider-specific contract is design-only in [Future Plaid Hosted Link design](PLAID_HOSTED_LINK.md); it needs code, tests, external approval, and an explicit configuration mapping before use.
+The app has two distinct U.S. provider paths: the built-in Plaid Hosted Link implementation for one personal credit/charge card, and an operator-reviewed `approved-provider-generic` adapter. Do not point the generic OAuth/response variables at Plaid. The built-in Plaid path uses Plaid's fixed Sandbox or Production HTTPS host, exact API schemas, Transactions product, and encrypted per-Item records instead.
+
+For ordinary Plaid setup, prefer **Accounts → Open step-by-step guide**. It verifies and writes the submitted Plaid app credentials to the fixed Windows Generic Credential references and saves only the non-secret environment/redirect choice locally. Environment variables remain the deployment/default contract; actual secrets never belong in `.env`.
 
 | Variable | Required | Meaning |
 | --- | --- | --- |
-| `AMEX_US_AGGREGATOR` | No | Normalized provider adapter name. Defaults to `disabled`; only an independently approved consent-based read-only provider may be enabled. No provider or direct Amex access is bundled. |
-| `AMEX_US_AGGREGATOR_ENVIRONMENT` | Conditional | `sandbox` or `production` provider environment. |
-| `AMEX_US_AGGREGATOR_BASE_URL` | Conditional | Reviewed provider API base URL. Required whenever the adapter is not disabled. |
-| `AMEX_US_AGGREGATOR_CLIENT_ID_REF` | Conditional | Reference to the registered OAuth client ID. Required when enabled. |
-| `AMEX_US_AGGREGATOR_CLIENT_SECRET_REF` | Conditional | Reference to the protected OAuth client secret. Required when enabled. |
-| `AMEX_US_OAUTH_AUTHORIZATION_URL` | Conditional | Exact HTTPS authorization endpoint supplied by the approved provider; required when enabled. |
-| `AMEX_US_OAUTH_TOKEN_URL` | Conditional | Exact HTTPS token endpoint supplied by the approved provider; required when enabled. |
-| `AMEX_US_OAUTH_REVOCATION_URL` | No | Optional exact HTTPS revocation endpoint when the approved provider supports it. |
-| `AMEX_US_AGGREGATOR_REDIRECT_URI` | No | Loopback OAuth callback registered with the provider. |
-| `AMEX_US_AGGREGATOR_SCOPES` | No | Requested read-only scopes. Provider setup must reject write/payment/control scopes. |
-| `AMEX_US_PROVIDER_RESPONSE_PROFILE` | No | Versioned response contract; the current adapter accepts only `normalized_v1`. This does not make an arbitrary provider compatible. |
-| `AMEX_US_API_ACCOUNTS_PATH` | No | Relative GET path for the provider's normalized account list. |
-| `AMEX_US_API_ACCOUNT_STATUS_PATH` | No | Relative GET template for one account status; must include `{providerAccountId}`. |
-| `AMEX_US_API_TRANSACTIONS_PATH` | No | Relative GET template for transactions; must include `{providerAccountId}`. |
-| `AMEX_US_API_STATEMENTS_PATH` | No | Relative GET template for statement summaries; must include `{providerAccountId}`. |
-| `AMEX_US_API_STATEMENT_PATH` | No | Relative GET template for one statement; must include `{providerAccountId}` and `{providerStatementId}`. |
-| `AMEX_US_PROVIDER_MAX_RESPONSE_MB` | No | Maximum response body accepted from the provider, in MiB; default `10`. Oversized responses fail closed. |
-| `AMEX_US_OAUTH_CALLBACK_PORT` | No | Loopback callback port. |
+| `AMEX_US_AGGREGATOR` | No | `plaid` (the default built-in personal-card path), `approved-provider-generic`, or `disabled`. This selects software behavior; it does not provide Plaid access or direct Amex connectivity. |
+| `AMEX_US_AGGREGATOR_ENVIRONMENT` | Conditional | `sandbox` or `production`. Plaid Sandbox is fake data. Plaid Production uses separate credentials and real financial data. |
+| `AMEX_US_AGGREGATOR_BASE_URL` | Conditional | Generic adapter only: reviewed provider API base URL, required for `approved-provider-generic`. Plaid uses fixed environment hosts. |
+| `AMEX_US_AGGREGATOR_CLIENT_ID_REF` | Conditional | Protected client-ID locator. The built-in Plaid wizard uses `wincred:AmexLocalFinanceConnector%2FPlaid%2FClientId` by default. |
+| `AMEX_US_AGGREGATOR_CLIENT_SECRET_REF` | Conditional | Protected secret locator. The built-in Plaid wizard uses `wincred:AmexLocalFinanceConnector%2FPlaid%2FSecret` by default. |
+| `AMEX_US_PLAID_REDIRECT_URI` | No | Plaid Production OAuth return URL. For this external-browser desktop flow it may be omitted when the Plaid tenant/institution permits, but configure it when required and preferably when the deployment has a reviewed return URL. It must be an owned plain HTTPS URL already allowlisted in the Plaid Dashboard, with no credentials, query, or fragment. The in-app wizard can save this non-secret setting. |
+| `AMEX_US_OAUTH_AUTHORIZATION_URL` | Conditional | Generic adapter only: exact HTTPS authorization endpoint. |
+| `AMEX_US_OAUTH_TOKEN_URL` | Conditional | Generic adapter only: exact HTTPS token endpoint. |
+| `AMEX_US_OAUTH_REVOCATION_URL` | No | Generic adapter only: optional exact HTTPS revocation endpoint. Built-in Plaid disconnect uses `/item/remove`. |
+| `AMEX_US_AGGREGATOR_REDIRECT_URI` | No | Generic adapter only: IPv4 loopback OAuth callback registered with that provider. It is not Plaid's OAuth return URL. |
+| `AMEX_US_AGGREGATOR_SCOPES` | No | Generic adapter only: requested read-only scopes. Built-in Plaid enforces `transactions` plus credit/charge-card filtering in code instead of reading this string. |
+| `AMEX_US_PROVIDER_RESPONSE_PROFILE` | No | Generic adapter only: versioned response contract; accepts only `normalized_v1`. This does not make an arbitrary provider compatible. |
+| `AMEX_US_API_ACCOUNTS_PATH` | No | Generic adapter only: relative GET path for the normalized account list. |
+| `AMEX_US_API_ACCOUNT_STATUS_PATH` | No | Generic adapter only: relative GET template for one account status; must include `{providerAccountId}`. |
+| `AMEX_US_API_TRANSACTIONS_PATH` | No | Generic adapter only: relative GET template for transactions; must include `{providerAccountId}`. |
+| `AMEX_US_API_STATEMENTS_PATH` | No | Generic adapter only: relative GET template for statement summaries; must include `{providerAccountId}`. |
+| `AMEX_US_API_STATEMENT_PATH` | No | Generic adapter only: relative GET template for one statement; must include `{providerAccountId}` and `{providerStatementId}`. |
+| `AMEX_US_PROVIDER_MAX_RESPONSE_MB` | No | Maximum accepted provider response, in MiB; default `10`. Applies to both provider paths; oversized responses fail closed. |
+| `AMEX_US_OAUTH_CALLBACK_PORT` | No | Generic adapter only: loopback callback port. Plaid Hosted Link completion is checked through bounded `/link/token/get` polling. |
 | `AMEX_US_SYNC_INTERVAL_MINUTES` | No | Validation-only target for automatic refresh scheduling. The alpha syncs only from an explicit desktop action. |
 | `AMEX_US_SYNC_LOOKBACK_DAYS` | No | Initial/repair transaction lookback request. Provider limits still apply. |
 | `AMEX_US_TOKEN_REFRESH_SKEW_SECONDS` | No | Refresh-before-expiry margin. Reauthorization is requested only when refresh cannot restore valid consent. |
 
-OAuth access/refresh tokens are per authorized account connection and belong in the encrypted local token vault/database, not environment variables. The provider's hosted flow obtains user consent. The application must never ask for, scrape, log, or store an Amex username, password, one-time code, or security answer. An expected external provider or American Express page may handle authentication, but its credentials must never cross into this app.
+Provider grants are per authorized account connection and belong in the encrypted local token vault/database, not environment variables. For Plaid, the `client_id` and environment-specific `secret` are resolved only in the privileged provider boundary from the two Windows Credential references. Per-Item Plaid access tokens, Item IDs, and exact provider account IDs are internal encrypted records. Never copy them to `.env`, logs, screenshots, or support messages.
 
-If a future Plaid implementation deliberately maps its API registration to `AMEX_US_AGGREGATOR_CLIENT_ID_REF` and `AMEX_US_AGGREGATOR_CLIENT_SECRET_REF`, both settings must still contain only environment-specific `wincred:` locators. The Plaid `client_id` and `secret` are resolved only in the privileged provider boundary. Per-Item Plaid access tokens and Item IDs are internal encrypted connection records, not `.env` values. Merely adding those references today does not enable Plaid.
+The provider's external flow obtains owner consent. The application must never ask for, scrape, log, or store an Amex username, password, one-time code, or security answer. A genuine external Plaid or American Express page may handle authentication, but those credentials must never cross into this app. Plaid Statements does not provide credit-card statement documents; the built-in path honestly reports statement retrieval unavailable.
 
 ## Japan import variables
 
@@ -189,6 +192,6 @@ Rotate provider client secrets at their source, update the corresponding Windows
 1. Confirm the MCP host is exactly `127.0.0.1` and Windows Firewall has no inbound rule for the app.
 2. Confirm demo mode, telemetry, crash reporting, and insecure storage are off for production.
 3. Confirm every `_REF` value is a reference and not a secret.
-4. Confirm the U.S. adapter is disabled until provider approval, read-only scopes, redirect URI, and data handling are reviewed.
+4. Use Plaid Sandbox first. Before Production, confirm provider approval, current American Express Transactions coverage, read-only product/account filtering, any required redirect URI, and data handling are reviewed.
 5. Confirm tunnel organization/workspace associations grant only the intended owner/workspace access.
 6. Confirm export human approval remains on and review target account/entity mappings before every export.

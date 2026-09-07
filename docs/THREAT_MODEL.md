@@ -24,7 +24,7 @@ Included:
 - account/portfolio selection and every read-only MCP tool;
 - installer, update path, dependencies, backups, deletion, and operational recovery.
 
-External systems are modeled at their trust boundary, not internally: American Express, an approved U.S. aggregation provider, OpenAI/ChatGPT and Secure MCP Tunnel, QuickBooks Online import, Money Forward Cloud Accounting import, Windows/DPAPI, and certificate/update infrastructure. Plaid Hosted Link is currently only a candidate future provider design; naming it in [the design reference](PLAID_HOSTED_LINK.md) does not make it implemented, approved, or trusted.
+External systems are modeled at their trust boundary, not internally: American Express, Plaid or another approved U.S. aggregation provider, OpenAI/ChatGPT and Secure MCP Tunnel, QuickBooks Online import, Money Forward Cloud Accounting import, Windows/DPAPI, and certificate/update infrastructure. The local alpha implements a built-in Plaid Hosted Link/Transactions path, but implementation and Sandbox tests do not make Plaid Production approved, trusted, or verified for live American Express use. See [the provider boundary](PLAID_HOSTED_LINK.md).
 
 Out of scope as a solvable application property:
 
@@ -97,7 +97,7 @@ CSV, Excel, QIF, PDF, filenames, archive structures, formulas, encodings, and em
 
 Tokens and read-only data cross TLS. Callback parameters, account identifiers, pagination, webhook/poll results, schemas, and provider errors are untrusted until correlated and validated.
 
-For the future Plaid Hosted Link profile, the privileged process would create and retain a per-attempt `link_token`, validate the returned Plaid HTTPS URL, and obtain completion through bounded `/link/token/get` polling (or a separately reviewed, correlated `SESSION_FINISHED` webhook). Hosted Link has no frontend success callback; a browser redirect or window close is not authorization evidence. Current results belong under `link_sessions[].results.item_add_results[]`, may contain more than one Item/account, and this single-card design must reject anything other than exactly one expected result. It must check the environment, local owner, pending attempt, credit/charge subtype, and a deployment-reviewed institution ID/exact name verified through `/institutions/get_by_id` before retaining the grant. The Plaid API registration and Item access token must never cross into the renderer, URL, logs, or support output.
+For the built-in Plaid Hosted Link profile, the privileged process creates and retains a per-attempt `link_token`, validates the returned Plaid HTTPS URL, and obtains completion through bounded `/link/token/get` polling. Hosted Link has no frontend success callback; a browser redirect or window close is not authorization evidence. Current results belong under `link_sessions[].results.item_add_results[]`, may contain more than one Item/account, and this single-card implementation rejects anything other than exactly one expected result. It checks the environment, local owner, pending attempt, credit/charge subtype, and the returned institution ID/name through `/institutions/get_by_id` against the environment's exact allowed institution name (Sandbox: First Platypus Bank; Production: American Express) before retaining the grant. There is no guessed or hard-coded universal American Express institution ID. The Plaid API registration and Item access token must never cross into the renderer, URL, logs, or support output.
 
 ### TB-5: MCP transport to query service
 
@@ -120,7 +120,7 @@ After explicit approval, sensitive files leave the encrypted application store. 
 - Resolve portfolio membership once per request against a consistent snapshot; apply non-null `account_id` predicates to every financial query.
 - Keep provider grants and secret references separate. Validate that every provider record belongs to the expected grant and local account before commit.
 - Use least-privilege, read-only provider scopes and independent revocation/reauthorization state per grant.
-- For a Plaid Transactions design, enforce the exact product and credit/charge-card account filters; do not treat generic scope strings, OAuth account filtering, or a masked identifier as proof of the granted account. Do not request unsupported credit-card Statements or write-capable Plaid products.
+- For the Plaid Transactions path, enforce the exact product and credit/charge-card account filters; do not treat generic scope strings, OAuth account filtering, or a masked identifier as proof of the granted account. Do not request unsupported credit-card Statements or write-capable Plaid products.
 - Do not disclose the existence of out-of-scope IDs in errors.
 
 ### Secret and data protection

@@ -26,6 +26,7 @@ const plaidAccountSchema = z.object({
     iso_currency_code: z.string().max(16).nullable(),
     unofficial_currency_code: z.string().max(64).nullable(),
   }).passthrough(),
+  holder_category: z.enum(["business", "personal", "unrecognized"]).nullable().optional(),
   mask: z.string().max(16).nullable(),
   name: safeText,
   official_name: safeText.nullable().optional(),
@@ -297,6 +298,15 @@ export function requireSinglePlaidPersonalCard(
 ): PlaidAccount {
   const eligible = accounts.filter(isPlaidPersonalCardAccount);
   if (accounts.length !== 1 || eligible.length !== 1) {
+    if (
+      accounts.length === 1 &&
+      isPlaidUsdCardAccount(accounts[0]!) &&
+      accounts[0]!.holder_category === "business"
+    ) {
+      throw invalidResponse(
+        "Plaid identified the selected card as a business account; the U.S. personal path cannot connect it.",
+      );
+    }
     throw invalidResponse("The Plaid Item must expose exactly one U.S. personal credit or charge card.");
   }
   const account = eligible[0]!;
@@ -397,6 +407,14 @@ function isPersonalCardAccount(account: z.infer<typeof plaidLinkAccountSchema>):
 }
 
 function isPlaidPersonalCardAccount(account: PlaidAccount): boolean {
+  // Plaid's holder_category is a beta field and can be null, unrecognized, or
+  // omitted. In those cases the user's explicit U.S.-personal setup choice is
+  // the account-class attestation. An affirmative provider classification as
+  // business always overrides that attestation and fails closed.
+  return isPlaidUsdCardAccount(account) && account.holder_category !== "business";
+}
+
+function isPlaidUsdCardAccount(account: PlaidAccount): boolean {
   return isPersonalCardAccount({
     id: account.account_id,
     mask: account.mask,
