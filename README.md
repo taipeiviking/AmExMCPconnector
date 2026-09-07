@@ -2,7 +2,7 @@
 
 A Windows 11-focused, local-first desktop application for owner-controlled American Express financial data. It runs from the system tray, keeps credentials and data on one Windows installation, and exposes only seven explicitly scoped, read-only MCP tools.
 
-> **Development status:** this is a runnable local alpha, not production financial software and not affiliated with American Express. Start with the synthetic test drive. Japan CSV/XLSX/QIF/text-PDF import and all six reviewed accounting-file formats are wired end to end, but official statement layouts and accounting import behavior can change and must be verified before relying on real data. U.S. use requires an independently approved provider and configuration; this repository does not include provider access or direct/live Amex connectivity. Code signing, a reviewed update chain, broader real-format fixtures, operational recovery, and production security review remain release gates.
+> **Development status:** this is a runnable local alpha, not production financial software and not affiliated with American Express or Plaid. Start with the synthetic test drive. Japan CSV/XLSX/QIF/text-PDF import and all six reviewed accounting-file formats are wired end to end, but official statement layouts and accounting import behavior can change and must be verified before relying on real data. U.S. use requires an independently approved provider and configuration; this repository does not include provider access or direct/live Amex connectivity. Plaid Hosted Link is documented only as a future U.S. personal-card design and is not implemented. Code signing, a reviewed update chain, broader real-format fixtures, operational recovery, and production security review remain release gates.
 
 ## Installed the app? Start here
 
@@ -99,7 +99,7 @@ Unsigned installers are for local testing only. Production distribution needs pr
 
 ## Collection and export policy
 
-- **U.S.:** the normalized adapter runs only with an owner-configured, independently approved consent-based read-only provider. Provider OAuth tokens are isolated per authorization. The app never asks for or stores an Amex password, one-time code, or security answer. No provider is bundled or endorsed, and configuration alone is not evidence of live Amex access.
+- **U.S.:** the normalized adapter runs only with an owner-configured, independently approved consent-based read-only provider. Provider OAuth tokens are isolated per authorization. The app never asks for or stores an Amex password, one-time code, or security answer; authentication belongs on the expected external provider/bank page. No provider is bundled or endorsed, and configuration alone is not evidence of live Amex access. A future Plaid Hosted Link path is specified for read-only Transactions, not payments or credit-card statement PDFs, but still needs implementation and external Production approval.
 - **Japan:** the local pipeline accepts owner-selected CSV, `.xlsx`, QIF, and text-based PDF exports. Its first phase shows all candidate rows up to the 1,000-row review limit plus signed totals, duplicate/warning/reconciliation results, and mapping/source fingerprints; only the separate **Approve reviewed rows and import** action can commit. **Cancel preview** discards the pending preview. No browser automation, scraping, OCR, or encrypted-PDF bypass is included. Verify each official layout before relying on it.
 - **Portfolio:** in normal unlocked mode, the owner can rename the local portfolio and choose its member accounts with checkboxes. Selected personal/company accounts can be viewed together, but every transaction retains source account, legal entity, country, currency, class, and business purpose. A portfolio is an attributed view, not a merged ledger or synced object; removing membership does not delete an account or its data.
 - **Accounting:** QuickBooks Online and Money Forward integration ends at reviewed local import-file generation. Duplicate detection and an exact, one-time approval precede atomic package creation; each package includes checksums and a manifest. The app never posts or uploads automatically, and local duplicate history cannot see entries created elsewhere in the accounting system.
@@ -116,6 +116,7 @@ Unsigned installers are for local testing only. Production distribution needs pr
 - [Implementation plan](docs/IMPLEMENTATION_PLAN.md)
 - [Environment and secret configuration](docs/CONFIGURATION.md)
 - [Windows setup and Secure MCP Tunnel](docs/WINDOWS_SETUP.md)
+- [Future Plaid Hosted Link design for U.S. personal cards](docs/PLAID_HOSTED_LINK.md)
 - [Security reporting](SECURITY.md)
 
 ## Repository hygiene

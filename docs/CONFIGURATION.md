@@ -85,6 +85,8 @@ Connected mode accepts only a reviewed outbound client command supplied for the 
 
 ## U.S. aggregation variables
 
+These variables describe the current normalized, provider-agnostic adapter. They are **not** a drop-in Plaid configuration: Plaid Hosted Link does not use this adapter's generic authorization/token endpoints or `normalized_v1` response paths, and Plaid Statements does not support credit-card accounts. Do not set Plaid API URLs here and infer that the U.S. path is ready. The proposed provider-specific contract is design-only in [Future Plaid Hosted Link design](PLAID_HOSTED_LINK.md); it needs code, tests, external approval, and an explicit configuration mapping before use.
+
 | Variable | Required | Meaning |
 | --- | --- | --- |
 | `AMEX_US_AGGREGATOR` | No | Normalized provider adapter name. Defaults to `disabled`; only an independently approved consent-based read-only provider may be enabled. No provider or direct Amex access is bundled. |
@@ -109,7 +111,9 @@ Connected mode accepts only a reviewed outbound client command supplied for the 
 | `AMEX_US_SYNC_LOOKBACK_DAYS` | No | Initial/repair transaction lookback request. Provider limits still apply. |
 | `AMEX_US_TOKEN_REFRESH_SKEW_SECONDS` | No | Refresh-before-expiry margin. Reauthorization is requested only when refresh cannot restore valid consent. |
 
-OAuth access/refresh tokens are per authorized account connection and belong in the encrypted local token vault/database, not environment variables. The provider’s hosted flow obtains user consent. The application must never ask for, scrape, log, or store an Amex username, password, one-time code, or security answer.
+OAuth access/refresh tokens are per authorized account connection and belong in the encrypted local token vault/database, not environment variables. The provider's hosted flow obtains user consent. The application must never ask for, scrape, log, or store an Amex username, password, one-time code, or security answer. An expected external provider or American Express page may handle authentication, but its credentials must never cross into this app.
+
+If a future Plaid implementation deliberately maps its API registration to `AMEX_US_AGGREGATOR_CLIENT_ID_REF` and `AMEX_US_AGGREGATOR_CLIENT_SECRET_REF`, both settings must still contain only environment-specific `wincred:` locators. The Plaid `client_id` and `secret` are resolved only in the privileged provider boundary. Per-Item Plaid access tokens and Item IDs are internal encrypted connection records, not `.env` values. Merely adding those references today does not enable Plaid.
 
 ## Japan import variables
 

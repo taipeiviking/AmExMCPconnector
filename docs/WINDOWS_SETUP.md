@@ -63,15 +63,19 @@ Tunnel credentials, OAuth tokens, and any `sk-...` value must never appear in `.
 
 ## U.S. account authorization
 
-The local alpha contains a normalized, provider-agnostic OAuth/read adapter, not a provider contract, provider account, endorsement, or direct/live Amex integration. Before enabling it:
+The local alpha contains a normalized, provider-agnostic OAuth/read adapter, not a provider contract, provider account, endorsement, or direct/live Amex integration. Its current endpoint contract is not a Plaid adapter. Do not point the generic OAuth or normalized-response variables at Plaid and assume compatibility.
 
-1. Contract with/obtain approval for a consent-based provider that supports the required U.S. Amex accounts and read-only account, transaction, and statement data.
-2. Register a loopback OAuth redirect exactly matching `AMEX_US_AGGREGATOR_REDIRECT_URI`.
-3. Store the client registration in the current user’s protected Windows secret store and configure only its `wincred:` references.
+Plaid Hosted Link is documented as a candidate future **U.S. personal-card** path in [Future Plaid Hosted Link design](PLAID_HOSTED_LINK.md). It is not implemented or enabled, and this repository does not include Plaid access. Before any provider path is enabled:
+
+1. Contract with or obtain approval for a consent-based provider that supports the exact U.S. Amex account types and read-only data product required by this app. Verify each product separately; transaction availability does not imply statement-PDF availability.
+2. Register only the authorization return destinations required by that provider's exact desktop flow. For Plaid, Production OAuth redirect URIs are HTTPS and Dashboard-allowlisted; Hosted Link's optional completion redirect is a separate field and is not evidence of success. Do not reuse the generic loopback assumption without a provider-specific review.
+3. Store the client registration in the current user's protected Windows secret store and configure only its `wincred:` references. Keep Sandbox and Production credentials and data completely separate.
 4. Review scopes to exclude payments, transfers, card controls, disputes, and accounting writes.
 5. Configure the approved provider's exact HTTPS endpoints and normalized response mapping, then test separate consent, refresh, revocation, pagination, response limits, and reauthorization for every account. Never reuse one account’s token or provider item as another’s.
 
-The desktop UI must open the provider’s consent page. It must never display a form that asks for an Amex password. If a provider cannot offer approved consent-based access, leave the adapter disabled.
+For the proposed Plaid profile, request only `products: ["transactions"]`, restrict results to exactly one `credit card` or `charge card`, and start in Plaid Sandbox with mock data. Sandbox cannot reproduce American Express's institution-specific OAuth experience. Moving to Production requires Plaid access through a paid plan or trial, current application/company and institution registration, protected Production credentials, exact American Express/Transactions coverage evidence, a deployment-reviewed Plaid institution ID and exact name verified through `/institutions/get_by_id`, billing/privacy/security review, and successful revocation/deletion tests. There is no guessed/default Amex institution ID. A Plaid trial uses Production and real data; it is not Sandbox.
+
+The desktop UI must open the provider's consent page in the system browser and must never display a form that asks for an Amex password. An official external provider or bank page may request authentication. If a provider cannot offer approved consent-based access, if the required card/product is unavailable, or if the result cannot be correlated to one local account, leave the adapter disabled.
 
 ## Japan statement import
 

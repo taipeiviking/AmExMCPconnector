@@ -24,7 +24,7 @@ Included:
 - account/portfolio selection and every read-only MCP tool;
 - installer, update path, dependencies, backups, deletion, and operational recovery.
 
-External systems are modeled at their trust boundary, not internally: American Express, an approved U.S. aggregation provider, OpenAI/ChatGPT and Secure MCP Tunnel, QuickBooks Online import, Money Forward Cloud Accounting import, Windows/DPAPI, and certificate/update infrastructure.
+External systems are modeled at their trust boundary, not internally: American Express, an approved U.S. aggregation provider, OpenAI/ChatGPT and Secure MCP Tunnel, QuickBooks Online import, Money Forward Cloud Accounting import, Windows/DPAPI, and certificate/update infrastructure. Plaid Hosted Link is currently only a candidate future provider design; naming it in [the design reference](PLAID_HOSTED_LINK.md) does not make it implemented, approved, or trusted.
 
 Out of scope as a solvable application property:
 
@@ -97,6 +97,8 @@ CSV, Excel, QIF, PDF, filenames, archive structures, formulas, encodings, and em
 
 Tokens and read-only data cross TLS. Callback parameters, account identifiers, pagination, webhook/poll results, schemas, and provider errors are untrusted until correlated and validated.
 
+For the future Plaid Hosted Link profile, the privileged process would create and retain a per-attempt `link_token`, validate the returned Plaid HTTPS URL, and obtain completion through bounded `/link/token/get` polling (or a separately reviewed, correlated `SESSION_FINISHED` webhook). Hosted Link has no frontend success callback; a browser redirect or window close is not authorization evidence. Current results belong under `link_sessions[].results.item_add_results[]`, may contain more than one Item/account, and this single-card design must reject anything other than exactly one expected result. It must check the environment, local owner, pending attempt, credit/charge subtype, and a deployment-reviewed institution ID/exact name verified through `/institutions/get_by_id` before retaining the grant. The Plaid API registration and Item access token must never cross into the renderer, URL, logs, or support output.
+
 ### TB-5: MCP transport to query service
 
 Tool name, target, filters, pagination cursor, and caller behavior are untrusted. Tool metadata is not authorization. The query service must enforce schema, target, readiness, bounds, and row predicates.
@@ -118,6 +120,7 @@ After explicit approval, sensitive files leave the encrypted application store. 
 - Resolve portfolio membership once per request against a consistent snapshot; apply non-null `account_id` predicates to every financial query.
 - Keep provider grants and secret references separate. Validate that every provider record belongs to the expected grant and local account before commit.
 - Use least-privilege, read-only provider scopes and independent revocation/reauthorization state per grant.
+- For a Plaid Transactions design, enforce the exact product and credit/charge-card account filters; do not treat generic scope strings, OAuth account filtering, or a masked identifier as proof of the granted account. Do not request unsupported credit-card Statements or write-capable Plaid products.
 - Do not disclose the existence of out-of-scope IDs in errors.
 
 ### Secret and data protection
@@ -177,7 +180,7 @@ Ratings are qualitative. “Residual” assumes the listed controls are implemen
 | T-01 | Offline theft of database or computer exposes financial history. | High | Authenticated encryption, user-wrapped key, private ACLs, Windows device encryption guidance, locked session. | Medium: an unlocked/compromised user session can decrypt. |
 | T-02 | Tokens or database key leak through `.env`, config, logs, crash dump, command line, or source control. | Critical | Vault references, startup secret scan, redaction tests, sanitized crash policy, repository scanning, no command-line secrets. | Low/medium: process-memory inspection remains possible. |
 | T-03 | A renderer exploit obtains filesystem, vault, or process access. | Critical | Sandboxed renderer, context isolation, no Node integration, strict CSP, narrow schema-checked IPC. | Medium: privileged-process defects remain possible. |
-| T-04 | OAuth login CSRF, callback interception, code replay, or malicious redirect binds the wrong grant. | High | State correlation, PKCE, nonce where applicable, exact redirect URI, one-time callback, TLS, system browser, timeout. | Low/medium: provider/OS/browser compromise remains. |
+| T-04 | OAuth/Hosted Link CSRF, callback or completion spoofing, public-token replay, or malicious redirect binds the wrong grant. | High | Per-attempt state/link-token correlation, PKCE/nonce where applicable, exact redirect/origin allowlists, validated Hosted Link URL, one-time token exchange, webhook verification or bounded status polling, TLS, system browser, timeout. | Low/medium: provider/OS/browser compromise remains. |
 | T-05 | Application accidentally stores an Amex password or accepts a phishing credential field. | Critical | No password fields/interfaces, provider-only consent allowlist, UI tests, log scanning, security review. | Low: a malicious external page can still phish; show origin and educate user. |
 | T-06 | Provider token/account confusion imports one card's records into another local account. | Critical | Per-grant binding, provider-account mapping confirmation, response correlation, account invariant constraints, reconciliation. | Low/medium: provider can return incorrect metadata. |
 | T-07 | Revoked/expired consent is repeatedly retried or causes unnecessary reauthorization/phishing fatigue. | Medium | Explicit state machine, bounded refresh, distinguish transient errors, UI-only reauthorization. | Low. |
@@ -205,7 +208,7 @@ Ratings are qualitative. “Residual” assumes the listed controls are implemen
 | T-29 | Compromised dependency, installer, update, or signing key executes code as the user. | Critical | Lockfile, SBOM, scans, provenance, signed artifacts/updates, protected signing, staged rollout, rollback controls. | Medium. |
 | T-30 | Sensitive data appears in screenshots, tray notifications, recent-file lists, clipboard, thumbnails, or Windows search index. | High | Protected production startup; synthetic-only source and marked unsigned-alpha screenshot exceptions; native confirmation, visible warning, session reset, generic notifications, private directories, no automatic clipboard use, file attribute/indexing guidance, UI privacy review. | Medium: cameras, privileged capture software, and user-directed copies remain possible. |
 | T-31 | Clock rollback or timezone confusion changes token, statement, audit, or duplicate logic. | Medium | Store UTC instants plus source local date/zone, monotonic durations for timeouts, detect major clock changes, explicit period rules. | Low/medium. |
-| T-32 | Disconnect/uninstall is mistaken for secure deletion, leaving tokens or data behind. | High | Separate revoke/disconnect/delete semantics, deletion preview, vault cleanup, uninstall retention disclosure, verification. | Medium: SSD/backup remanence can persist. |
+| T-32 | Disconnect, provider/institution revocation, local token removal, local data deletion, or uninstall is mistaken for another action, leaving tokens, billing, consent, or copied data behind. | High | For Plaid, call and verify `/item/remove`; report institution/provider consent separately; keep destructive local deletion explicit; clean the vault; disclose uninstall/backup retention and verify outcomes. | Medium: institution permission displays, SSD/backup remanence, and external copies can persist. |
 
 ## Abuse cases and security tests
 
@@ -230,7 +233,7 @@ The automated suite must include at least:
 ## Privacy and financial-data caveats
 
 - The database is local, but MCP responses intentionally sent through Secure MCP Tunnel are processed outside the computer by the selected OpenAI product. The owner must review applicable OpenAI workspace, retention, and data-control settings. This design does not make remote query results “local-only.”
-- The U.S. aggregation provider will necessarily process consent and account data. Provider selection, user disclosures, retention/deletion, subprocessor review, breach handling, and regional availability require legal and security due diligence.
+- The U.S. aggregation provider will necessarily process consent and account data. Provider selection, user disclosures, retention/deletion, subprocessor review, breach handling, and regional availability require legal and security due diligence. Plaid Sandbox is mock data and cannot establish American Express-specific Production coverage; a Plaid trial uses Production and real data. A successful Hosted Link session or Transactions Item also does not establish support for credit-card statement PDFs.
 - Imported statements and exported accounting packages are highly sensitive. Once copied, emailed, placed in a cloud-synced folder, or imported elsewhere, this application cannot enforce their retention or access controls.
 - Store only masked account identifiers such as last four digits when display requires them. Avoid PAN and never store CVV, PIN, or passwords. This threat model is not a PCI DSS, SOC, privacy-law, or other compliance certification.
 - Reconciliation reduces errors but cannot establish issuer truth. Category, business-purpose, tax, FX, anomaly, and fraud outputs are derived aids requiring human review.
